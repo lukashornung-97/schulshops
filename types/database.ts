@@ -17,6 +17,7 @@ export interface Database {
           city: string | null
           country: string | null
           contact_id: string | null
+          status: 'lead' | 'active' | 'existing'
           created_at: string
         }
         Insert: {
@@ -26,6 +27,7 @@ export interface Database {
           city?: string | null
           country?: string | null
           contact_id?: string | null
+          status?: 'lead' | 'active' | 'existing'
           created_at?: string
         }
         Update: {
@@ -35,6 +37,7 @@ export interface Database {
           city?: string | null
           country?: string | null
           contact_id?: string | null
+          status?: 'lead' | 'active' | 'existing'
           created_at?: string
         }
       }
@@ -267,6 +270,44 @@ export interface Database {
           phone?: string | null
           mobile?: string | null
           notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      school_notes: {
+        Row: {
+          id: string
+          school_id: string
+          type: 'note' | 'task'
+          title: string
+          content: string | null
+          completed: boolean
+          due_date: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          school_id: string
+          type?: 'note' | 'task'
+          title: string
+          content?: string | null
+          completed?: boolean
+          due_date?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          school_id?: string
+          type?: 'note' | 'task'
+          title?: string
+          content?: string | null
+          completed?: boolean
+          due_date?: string | null
+          created_by?: string | null
           created_at?: string
           updated_at?: string
         }

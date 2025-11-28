@@ -98,3 +98,4 @@ Falls Sie einen neuen Token benötigen:
 - [Shopify Custom Apps Dokumentation](https://help.shopify.com/en/manual/apps/custom-apps)
 - [Shopify Admin API Dokumentation](https://shopify.dev/docs/api/admin-graphql)
 
+

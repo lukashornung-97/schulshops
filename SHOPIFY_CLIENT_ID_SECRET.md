@@ -86,3 +86,4 @@ Falls OAuth zu komplex ist, können Sie auch:
 
 Siehe: `SHOPIFY_TOKEN_GUIDE.md`
 
+

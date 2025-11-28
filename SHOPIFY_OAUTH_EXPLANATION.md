@@ -83,3 +83,4 @@ Da Sie bereits Client ID und Secret haben, haben Sie wahrscheinlich eine App üb
    - Benötigt Backend für Token-Austausch
    - Ermöglicht Multi-Store-Support
 
+

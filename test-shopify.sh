@@ -52,3 +52,4 @@ else
   echo "4. Token hat nicht die Berechtigung 'write_products'"
 fi
 
+

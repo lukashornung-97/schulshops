@@ -34,3 +34,4 @@ create index if not exists idx_shopify_product_mappings_product_id
 create index if not exists idx_shopify_product_mappings_shopify_product_id
   on public.shopify_product_mappings (shopify_product_id);
 
+

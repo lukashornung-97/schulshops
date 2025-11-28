@@ -8,7 +8,7 @@ import {
   Box,
   TextField,
   Button,
-  Paper,
+  Card,
   Grid,
   MenuItem,
 } from '@mui/material'
@@ -27,38 +27,88 @@ export default function NewShop() {
     shop_close_at: '',
   })
 
+  function convertLocalDateTimeToISO(localDateTime: string): string | null {
+    if (!localDateTime) return null
+    // datetime-local gibt Format zurück: "YYYY-MM-DDTHH:mm"
+    // Wir müssen es zu ISO-8601 mit Zeitzone konvertieren
+    // Erstelle ein Date-Objekt aus dem lokalen Datum/Zeit
+    const date = new Date(localDateTime)
+    // Konvertiere zu ISO-String (enthält Zeitzone)
+    return date.toISOString()
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
 
     try {
-      const { error } = await supabase.from('shops').insert([
-        {
-          ...formData,
-          school_id: params.id,
-          shop_open_at: formData.shop_open_at || null,
-          shop_close_at: formData.shop_close_at || null,
-        },
-      ])
+      const shopData = {
+        name: formData.name,
+        slug: formData.slug,
+        status: formData.status,
+        currency: formData.currency,
+        school_id: params.id as string,
+        shop_open_at: convertLocalDateTimeToISO(formData.shop_open_at),
+        shop_close_at: convertLocalDateTimeToISO(formData.shop_close_at),
+      }
 
-      if (error) throw error
+      console.log('Saving shop data:', shopData)
+      console.log('shop_open_at:', shopData.shop_open_at)
+      console.log('shop_close_at:', shopData.shop_close_at)
+
+      const { data, error } = await supabase.from('shops').insert([shopData]).select()
+
+      if (error) {
+        console.error('Supabase error:', error)
+        throw error
+      }
+
+      console.log('Shop created successfully:', data)
+
+      // Wenn der Shop als 'live' erstellt wurde, setze die Schule auf 'active'
+      if (shopData.status === 'live') {
+        try {
+          await supabase
+            .from('schools')
+            .update({ status: 'active' })
+            .eq('id', params.id)
+        } catch (statusError) {
+          console.error('Error updating school status:', statusError)
+          // Fehler beim Status-Update sollte nicht das Erstellen des Shops verhindern
+        }
+      }
 
       router.push(`/schools/${params.id}`)
     } catch (error) {
       console.error('Error creating shop:', error)
-      alert('Fehler beim Erstellen des Shops')
+      alert(`Fehler beim Erstellen des Shops: ${error instanceof Error ? error.message : 'Unbekannter Fehler'}`)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        Neuen Shop erstellen
-      </Typography>
+    <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <Container maxWidth="md" sx={{ py: 6 }}>
+        <Typography 
+          variant="h3" 
+          component="h1"
+          sx={{ 
+            fontWeight: 700,
+            mb: 1,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}
+        >
+          Neuen Shop erstellen
+        </Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+          Erstellen Sie einen neuen Shop für diese Schule
+        </Typography>
 
-      <Paper sx={{ p: 4, mt: 3 }}>
+        <Card sx={{ background: 'white', p: 4 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={3}>
             <Grid item xs={12}>
@@ -144,8 +194,9 @@ export default function NewShop() {
             </Grid>
           </Grid>
         </form>
-      </Paper>
-    </Container>
+        </Card>
+      </Container>
+    </Box>
   )
 }
 

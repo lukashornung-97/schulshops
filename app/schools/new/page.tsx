@@ -8,8 +8,9 @@ import {
   Box,
   TextField,
   Button,
-  Paper,
+  Card,
   Grid,
+  MenuItem,
 } from '@mui/material'
 import { supabase } from '@/lib/supabase'
 
@@ -21,6 +22,7 @@ export default function NewSchool() {
     short_code: '',
     city: '',
     country: 'DE',
+    status: 'lead' as 'lead' | 'active' | 'existing',
   })
 
   async function handleSubmit(e: React.FormEvent) {
@@ -42,12 +44,27 @@ export default function NewSchool() {
   }
 
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        Neue Schule erstellen
-      </Typography>
+    <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <Container maxWidth="md" sx={{ py: 6 }}>
+        <Typography 
+          variant="h3" 
+          component="h1"
+          sx={{ 
+            fontWeight: 700,
+            mb: 1,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}
+        >
+          Neue Schule erstellen
+        </Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+          Erstellen Sie eine neue Schule für Ihr System
+        </Typography>
 
-      <Paper sx={{ p: 4, mt: 3 }}>
+        <Card sx={{ background: 'white', p: 4 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={3}>
             <Grid item xs={12}>
@@ -84,6 +101,22 @@ export default function NewSchool() {
                 onChange={(e) => setFormData({ ...formData, country: e.target.value })}
               />
             </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                select
+                label="Status"
+                value={formData.status}
+                onChange={(e) =>
+                  setFormData({ ...formData, status: e.target.value as 'lead' | 'active' | 'existing' })
+                }
+                helperText="Kategorie der Schule"
+              >
+                <MenuItem value="lead">Lead</MenuItem>
+                <MenuItem value="active">Aktiv</MenuItem>
+                <MenuItem value="existing">Bestand</MenuItem>
+              </TextField>
+            </Grid>
             <Grid item xs={12}>
               <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
                 <Button
@@ -104,8 +137,9 @@ export default function NewSchool() {
             </Grid>
           </Grid>
         </form>
-      </Paper>
-    </Container>
+        </Card>
+      </Container>
+    </Box>
   )
 }
 

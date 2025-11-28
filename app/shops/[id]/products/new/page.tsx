@@ -8,7 +8,7 @@ import {
   Box,
   TextField,
   Button,
-  Paper,
+  Card,
   Grid,
   FormControlLabel,
   Switch,
@@ -52,12 +52,27 @@ export default function NewProduct() {
   }
 
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        Neues Produkt erstellen
-      </Typography>
+    <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <Container maxWidth="md" sx={{ py: 6 }}>
+        <Typography 
+          variant="h3" 
+          component="h1"
+          sx={{ 
+            fontWeight: 700,
+            mb: 1,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}
+        >
+          Neues Produkt erstellen
+        </Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+          Erstellen Sie ein neues Produkt für diesen Shop
+        </Typography>
 
-      <Paper sx={{ p: 4, mt: 3 }}>
+        <Card sx={{ background: 'white', p: 4 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={3}>
             <Grid item xs={12}>
@@ -132,8 +147,9 @@ export default function NewProduct() {
             </Grid>
           </Grid>
         </form>
-      </Paper>
-    </Container>
+        </Card>
+      </Container>
+    </Box>
   )
 }
 

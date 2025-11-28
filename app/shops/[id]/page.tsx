@@ -35,6 +35,12 @@ import AddIcon from '@mui/icons-material/Add'
 import StoreIcon from '@mui/icons-material/Store'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import CloseIcon from '@mui/icons-material/Close'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
+import InfoIcon from '@mui/icons-material/Info'
+import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
+import Snackbar from '@mui/material/Snackbar'
 
 type Shop = Database['public']['Tables']['shops']['Row']
 type Product = Database['public']['Tables']['products']['Row']
@@ -59,6 +65,19 @@ export default function ShopDetail() {
     message: string
     shopName?: string
   } | null>(null)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  })
+  const [editForm, setEditForm] = useState({
+    shop_open_at: '',
+    shop_close_at: '',
+  })
 
   useEffect(() => {
     if (params.id) {
@@ -66,6 +85,40 @@ export default function ShopDetail() {
       loadProducts()
     }
   }, [params.id])
+
+  async function updateSchoolStatusIfNeeded(hasActiveShop: boolean) {
+    if (!shop) return
+
+    try {
+      // Prüfe aktuellen Status der Schule
+      const { data: schoolData, error: fetchError } = await supabase
+        .from('schools')
+        .select('status')
+        .eq('id', shop.school_id)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching school status:', fetchError)
+        return
+      }
+
+      const currentStatus = schoolData?.status
+
+      // Wenn ein Shop aktiv ist, setze Schule auf 'active'
+      if (hasActiveShop && currentStatus !== 'active') {
+        const { error: updateError } = await supabase
+          .from('schools')
+          .update({ status: 'active' })
+          .eq('id', shop.school_id)
+
+        if (updateError) {
+          console.error('Error updating school status:', updateError)
+        }
+      }
+    } catch (error) {
+      console.error('Error in updateSchoolStatusIfNeeded:', error)
+    }
+  }
 
   async function loadShop() {
     try {
@@ -76,7 +129,18 @@ export default function ShopDetail() {
         .single()
 
       if (error) throw error
-      setShop(data)
+      console.log('Loaded shop data:', data)
+      console.log('shop_open_at:', data?.shop_open_at, 'Type:', typeof data?.shop_open_at)
+      console.log('shop_close_at:', data?.shop_close_at, 'Type:', typeof data?.shop_close_at)
+      
+      // Stelle sicher, dass die Daten korrekt gesetzt sind
+      if (data) {
+        setShop(data)
+        // Aktualisiere Schulstatus wenn Shop aktiv ist
+        if (data.status === 'live') {
+          await updateSchoolStatusIfNeeded(true)
+        }
+      }
     } catch (error) {
       console.error('Error loading shop:', error)
     }
@@ -108,6 +172,164 @@ export default function ShopDetail() {
       default:
         return 'warning'
     }
+  }
+
+  function formatDateTime(dateString: string | null): string {
+    if (!dateString) return '-'
+    const date = new Date(dateString)
+    return date.toLocaleString('de-DE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  function convertISOToLocalDateTime(isoString: string | null): string {
+    if (!isoString) return ''
+    const date = new Date(isoString)
+    // Konvertiere zu YYYY-MM-DDTHH:mm Format für datetime-local input
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    return `${year}-${month}-${day}T${hours}:${minutes}`
+  }
+
+  function convertLocalDateTimeToISO(localDateTime: string): string | null {
+    if (!localDateTime) return null
+    const date = new Date(localDateTime)
+    return date.toISOString()
+  }
+
+  function handleOpenEditDialog() {
+    if (shop) {
+      setEditForm({
+        shop_open_at: convertISOToLocalDateTime(shop.shop_open_at),
+        shop_close_at: convertISOToLocalDateTime(shop.shop_close_at),
+      })
+      setEditDialogOpen(true)
+    }
+  }
+
+  function handleCloseEditDialog() {
+    setEditDialogOpen(false)
+    setEditForm({
+      shop_open_at: '',
+      shop_close_at: '',
+    })
+  }
+
+  async function handleSaveOpeningHours() {
+    if (!shop) return
+
+    setSaving(true)
+    try {
+      const updateData = {
+        shop_open_at: convertLocalDateTimeToISO(editForm.shop_open_at),
+        shop_close_at: convertLocalDateTimeToISO(editForm.shop_close_at),
+      }
+
+      const { error } = await supabase
+        .from('shops')
+        .update(updateData)
+        .eq('id', shop.id)
+
+      if (error) throw error
+
+      await loadShop()
+      handleCloseEditDialog()
+      setSnackbar({
+        open: true,
+        message: 'Öffnungszeiten erfolgreich aktualisiert',
+        severity: 'success',
+      })
+    } catch (error: any) {
+      console.error('Error updating opening hours:', error)
+      setSnackbar({
+        open: true,
+        message: error?.message || 'Fehler beim Aktualisieren der Öffnungszeiten',
+        severity: 'error',
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDeleteShop() {
+    if (!shop) return
+
+    setDeleting(true)
+    try {
+      // Finde die school_id bevor wir den Shop löschen
+      const schoolId = shop.school_id
+
+      const { error } = await supabase
+        .from('shops')
+        .delete()
+        .eq('id', shop.id)
+
+      if (error) throw error
+
+      setSnackbar({
+        open: true,
+        message: 'Shop erfolgreich gelöscht',
+        severity: 'success',
+      })
+
+      // Navigiere zurück zur Schulansicht
+      router.push(`/schools/${schoolId}`)
+    } catch (error: any) {
+      console.error('Error deleting shop:', error)
+      setSnackbar({
+        open: true,
+        message: error?.message || 'Fehler beim Löschen des Shops',
+        severity: 'error',
+      })
+      setDeleting(false)
+    }
+  }
+
+  function getShopStatusInfo() {
+    if (!shop) return null
+
+    const now = new Date()
+    const openAt = shop.shop_open_at ? new Date(shop.shop_open_at) : null
+    const closeAt = shop.shop_close_at ? new Date(shop.shop_close_at) : null
+
+    if (!openAt && !closeAt) {
+      return { type: 'no-dates', message: 'Keine Öffnungszeiten festgelegt' }
+    }
+
+    if (openAt && now < openAt) {
+      const daysUntil = Math.ceil((openAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      return {
+        type: 'upcoming',
+        message: `Öffnet in ${daysUntil} ${daysUntil === 1 ? 'Tag' : 'Tagen'}`,
+        date: openAt,
+      }
+    }
+
+    if (closeAt && now > closeAt) {
+      return {
+        type: 'closed',
+        message: 'Shop ist geschlossen',
+        date: closeAt,
+      }
+    }
+
+    if (openAt && closeAt && now >= openAt && now <= closeAt) {
+      const daysRemaining = Math.ceil((closeAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      return {
+        type: 'open',
+        message: daysRemaining > 0 ? `Läuft noch ${daysRemaining} ${daysRemaining === 1 ? 'Tag' : 'Tage'}` : 'Läuft heute zu Ende',
+        date: closeAt,
+      }
+    }
+
+    return null
   }
 
   async function handleShopifyExport(productId: string) {
@@ -254,38 +476,175 @@ export default function ShopDetail() {
 
   if (loading) {
     return (
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Typography>Lade Shop...</Typography>
-      </Container>
+      <Box sx={{ minHeight: '100vh', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Typography variant="h6" color="text.secondary">Lade Shop...</Typography>
+      </Box>
     )
   }
 
   if (!shop) {
     return (
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Typography>Shop nicht gefunden</Typography>
-      </Container>
+      <Box sx={{ minHeight: '100vh', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Typography variant="h6" color="text.secondary">Shop nicht gefunden</Typography>
+      </Box>
     )
   }
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-          <StoreIcon sx={{ mr: 2, fontSize: 40, color: 'primary.main' }} />
-          <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="h4" component="h1">
-              {shop.name}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {shop.slug}
-            </Typography>
+    <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <Container maxWidth="xl" sx={{ py: 6 }}>
+        <Box sx={{ mb: 5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <Box
+              sx={{
+                width: 64,
+                height: 64,
+                borderRadius: 3,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <StoreIcon sx={{ fontSize: 32, color: 'white' }} />
+            </Box>
+            <Box sx={{ flexGrow: 1 }}>
+              <Typography 
+                variant="h3" 
+                component="h1"
+                sx={{ 
+                  fontWeight: 700,
+                  mb: 0.5,
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                }}
+              >
+                {shop.name}
+              </Typography>
+              <Typography 
+                variant="body1" 
+                sx={{ 
+                  color: 'text.secondary',
+                  fontWeight: 500,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}
+              >
+                {shop.slug}
+              </Typography>
           </Box>
-          <Chip
-            label={shop.status}
-            color={getStatusColor(shop.status) as any}
-          />
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Chip
+              label={shop.status}
+              color={getStatusColor(shop.status) as any}
+            />
+            <Tooltip title="Shop löschen">
+              <IconButton
+                color="error"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <DeleteIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Box>
+
+        {/* Öffnungszeiten Info Card */}
+        <Card variant="outlined" sx={{ mt: 2 }}>
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <AccessTimeIcon sx={{ mr: 1, color: 'primary.main' }} />
+                <Typography variant="h6" component="h3">
+                  Geplante Öffnungszeiten
+                </Typography>
+              </Box>
+              <IconButton
+                size="small"
+                onClick={handleOpenEditDialog}
+                color="primary"
+              >
+                <EditIcon />
+              </IconButton>
+            </Box>
+            {shop.shop_open_at || shop.shop_close_at ? (
+              <Grid container spacing={2}>
+                {shop.shop_open_at && (
+                  <Grid item xs={12} sm={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CalendarTodayIcon fontSize="small" color="action" />
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Öffnung
+                        </Typography>
+                        <Typography variant="body1" fontWeight="medium">
+                          {formatDateTime(shop.shop_open_at)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Grid>
+                )}
+                {shop.shop_close_at && (
+                  <Grid item xs={12} sm={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CalendarTodayIcon fontSize="small" color="action" />
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Schließung
+                        </Typography>
+                        <Typography variant="body1" fontWeight="medium">
+                          {formatDateTime(shop.shop_close_at)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Grid>
+                )}
+              </Grid>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+                Keine Öffnungszeiten festgelegt
+              </Typography>
+            )}
+            {(() => {
+              const statusInfo = getShopStatusInfo()
+              if (statusInfo && statusInfo.type !== 'no-dates') {
+                return (
+                  <Box sx={{ mt: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <InfoIcon 
+                        fontSize="small" 
+                        color={
+                          statusInfo.type === 'open' 
+                            ? 'success' 
+                            : statusInfo.type === 'closed' 
+                            ? 'error' 
+                            : 'warning'
+                        } 
+                      />
+                      <Typography
+                        variant="body2"
+                        color={
+                          statusInfo.type === 'open'
+                            ? 'success.main'
+                            : statusInfo.type === 'closed'
+                            ? 'error.main'
+                            : 'warning.main'
+                        }
+                        fontWeight="medium"
+                      >
+                        {statusInfo.message}
+                      </Typography>
+                    </Box>
+                  </Box>
+                )
+              }
+              return null
+            })()}
+          </CardContent>
+        </Card>
       </Box>
 
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -510,7 +869,108 @@ export default function ShopDetail() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Container>
+
+      {/* Edit Opening Hours Dialog */}
+      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Öffnungszeiten bearbeiten
+          <IconButton
+            aria-label="close"
+            onClick={handleCloseEditDialog}
+            sx={{
+              position: 'absolute',
+              right: 8,
+              top: 8,
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  type="datetime-local"
+                  label="Shop-Öffnung"
+                  value={editForm.shop_open_at}
+                  onChange={(e) => setEditForm({ ...editForm, shop_open_at: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  type="datetime-local"
+                  label="Shop-Schließung"
+                  value={editForm.shop_close_at}
+                  onChange={(e) => setEditForm({ ...editForm, shop_close_at: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseEditDialog} disabled={saving}>
+            Abbrechen
+          </Button>
+          <Button
+            onClick={handleSaveOpeningHours}
+            variant="contained"
+            disabled={saving}
+            startIcon={saving ? <CircularProgress size={20} /> : null}
+          >
+            {saving ? 'Speichere...' : 'Speichern'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Shop Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+        <DialogTitle>Shop löschen</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Möchten Sie den Shop "{shop.name}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.
+          </Typography>
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            Alle Produkte und Bestellungen dieses Shops werden ebenfalls gelöscht.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>
+            Abbrechen
+          </Button>
+          <Button
+            onClick={handleDeleteShop}
+            color="error"
+            variant="contained"
+            disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={20} /> : <DeleteIcon />}
+          >
+            {deleting ? 'Lösche...' : 'Löschen'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+      </Container>
+    </Box>
   )
 }
 

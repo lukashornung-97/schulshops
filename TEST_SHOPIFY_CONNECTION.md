@@ -70,3 +70,4 @@ Dann können Sie den OAuth Flow in der UI verwenden.
 - Stellen Sie sicher, dass `SHOPIFY_CLIENT_ID` und `SHOPIFY_CLIENT_SECRET` in `.env.local` gesetzt sind
 - Prüfen Sie die Redirect URI in Shopify Partner Dashboard
 
+

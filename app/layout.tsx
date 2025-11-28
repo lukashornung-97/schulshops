@@ -21,7 +21,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <ThemeProvider>
           <AppBar />
-          <main style={{ paddingTop: '64px' }}>
+          <main style={{ paddingTop: '72px', minHeight: 'calc(100vh - 72px)' }}>
             {children}
           </main>
         </ThemeProvider>
