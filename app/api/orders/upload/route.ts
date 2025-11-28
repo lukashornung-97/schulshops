@@ -1,0 +1,617 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { supabase } from '@/lib/supabase'
+import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
+
+interface OrderRow {
+  'Name'?: string // Order number (e.g., "#2016")
+  'Customer Name'?: string
+  'Customer: First name'?: string
+  'Customer: Last name'?: string
+  'Customer Email'?: string
+  'Email'?: string
+  'Class Name'?: string
+  'Klasse'?: string
+  'Line items: Custom attributes Klasse'?: string
+  'Product Name'?: string
+  'Line items: Title'?: string
+  'Product Variant'?: string
+  'Line items: Variant title'?: string
+  'Quantity'?: string
+  'Line items: Quantity'?: string
+  'Unit Price'?: string
+  'Line items: Price'?: string
+  'Total Amount'?: string
+  'Total'?: string
+  'Order Date'?: string
+  'Created at'?: string
+  'Created at (UTC)'?: string
+  'Line items: Product Tags'?: string
+}
+
+interface ParsedOrder {
+  shopId: string | null
+  customerName: string
+  customerEmail: string | null
+  className: string | null
+  items: Array<{
+    productName: string
+    variantName: string | null
+    quantity: number
+    unitPrice: number
+    productTags?: string
+  }>
+  totalAmount: number
+  orderDate: string | null
+}
+
+/**
+ * Konvertiere Excel-Datum zu ISO-String
+ */
+function excelDateToISO(dateValue: any): string | null {
+  if (!dateValue) return null
+  
+  if (typeof dateValue === 'string') {
+    const parsed = new Date(dateValue)
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString()
+    }
+    return dateValue
+  }
+  
+  if (dateValue instanceof Date) {
+    return dateValue.toISOString()
+  }
+  
+  if (typeof dateValue === 'number') {
+    const excelEpoch = new Date(1899, 11, 30)
+    const date = new Date(excelEpoch.getTime() + dateValue * 24 * 60 * 60 * 1000)
+    return date.toISOString()
+  }
+  
+  return null
+}
+
+/**
+ * Normalisiere String für Vergleich (lowercase, trim)
+ */
+function normalizeString(str: string | null | undefined): string {
+  if (!str) return ''
+  return str.toLowerCase().trim()
+}
+
+/**
+ * Extrahiere alle Product Tags als Array
+ */
+function extractAllProductTags(productTags: string | null | undefined): string[] {
+  if (!productTags) return []
+  return productTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
+}
+
+/**
+ * Finde Shop anhand von Product Tags (matcht auf shop slug)
+ */
+function findShopByProductTags(shops: Array<{ id: string; slug: string; name: string }>, productTags: string | null | undefined): string | null {
+  if (!productTags) return null
+  
+  const tags = extractAllProductTags(productTags)
+  if (tags.length === 0) return null
+  
+  // PRIORITÄT 1: Versuche exaktes Matching mit slug
+  for (const tag of tags) {
+    const normalizedTag = normalizeString(tag)
+    const shop = shops.find(s => {
+      const normalizedSlug = normalizeString(s.slug)
+      return normalizedSlug === normalizedTag
+    })
+    if (shop) {
+      console.log(`✓ Exaktes Match: Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
+      return shop.id
+    }
+  }
+  
+  // PRIORITÄT 2: Versuche Teilübereinstimmung mit slug (Tag enthält Slug oder umgekehrt)
+  for (const tag of tags) {
+    const normalizedTag = normalizeString(tag)
+    const shop = shops.find(s => {
+      const normalizedSlug = normalizeString(s.slug)
+      // Tag enthält Slug oder Slug enthält Tag
+      if (normalizedSlug.includes(normalizedTag) || normalizedTag.includes(normalizedSlug)) {
+        return true
+      }
+      // Auch prüfen ob Tag Teil des Slugs ist (z.B. "weinstadt" in "shop-weinstadt-2024")
+      const slugParts = normalizedSlug.split('-')
+      if (slugParts.includes(normalizedTag)) {
+        return true
+      }
+      return false
+    })
+    if (shop) {
+      console.log(`✓ Teilübereinstimmung: Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
+      return shop.id
+    }
+  }
+  
+  // PRIORITÄT 3: Versuche auch mit Shop-Name zu matchen (falls Slug nicht passt)
+  for (const tag of tags) {
+    const normalizedTag = normalizeString(tag)
+    const shop = shops.find(s => {
+      const normalizedName = normalizeString(s.name)
+      return normalizedName.includes(normalizedTag) || normalizedTag.includes(normalizedName)
+    })
+    if (shop) {
+      console.log(`✓ Match via Name: Tag "${tag}" → Shop "${shop.name}"`)
+      return shop.id
+    }
+  }
+  
+  console.warn(`✗ Kein Shop gefunden für Tags: ${tags.join(', ')}. Verfügbare Shops:`, shops.map(s => `${s.name} (${s.slug})`))
+  return null
+}
+
+/**
+ * API Route zum Hochladen von Bestellungen für alle Shops
+ * POST /api/orders/upload
+ * Ordnet Bestellungen automatisch Shops zu basierend auf Product Tags
+ */
+export async function POST(request: NextRequest) {
+  try {
+    // Lade alle Shops
+    const { data: shops, error: shopsError } = await supabase
+      .from('shops')
+      .select('id, slug, name')
+    
+    console.log(`Geladene Shops:`, shops?.map(s => `${s.name} (Slug: ${s.slug})`))
+
+    if (shopsError) {
+      return NextResponse.json(
+        { error: 'Fehler beim Laden der Shops' },
+        { status: 500 }
+      )
+    }
+
+    if (!shops || shops.length === 0) {
+      return NextResponse.json(
+        { error: 'Keine Shops gefunden. Bitte erstellen Sie zuerst einen Shop.' },
+        { status: 400 }
+      )
+    }
+
+    // Lade Datei aus Request
+    const formData = await request.formData()
+    const file = formData.get('file') as File
+
+    if (!file) {
+      return NextResponse.json(
+        { error: 'Keine Datei hochgeladen' },
+        { status: 400 }
+      )
+    }
+
+    // Prüfe Dateityp
+    const isCSV = file.name.endsWith('.csv') || file.type.includes('csv') || file.type.includes('text/csv')
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || 
+                     file.type.includes('spreadsheet') || file.type.includes('excel')
+    
+    if (!isCSV && !isExcel) {
+      return NextResponse.json(
+        { error: 'Nur CSV- oder Excel-Dateien (.xlsx, .xls) sind erlaubt' },
+        { status: 400 }
+      )
+    }
+
+    // Parse file (CSV or Excel)
+    let rows: OrderRow[] = []
+    
+    if (isExcel) {
+      const arrayBuffer = await file.arrayBuffer()
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[sheetName]
+      rows = XLSX.utils.sheet_to_json<OrderRow>(worksheet, { defval: '' })
+    } else {
+      const csvText = await file.text()
+      await new Promise<void>((resolve, reject) => {
+        Papa.parse<OrderRow>(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: (header) => header.trim(),
+          complete: (results) => {
+            rows = results.data
+            resolve()
+          },
+          error: (error) => {
+            reject(new Error(`Fehler beim Parsen der CSV-Datei: ${error.message}`))
+          },
+        })
+      })
+    }
+
+    if (rows.length === 0) {
+      return NextResponse.json(
+        { error: 'Datei ist leer' },
+        { status: 400 }
+      )
+    }
+
+    // Gruppiere Zeilen nach Bestellung
+    const ordersMap = new Map<string, ParsedOrder>()
+
+    for (const row of rows) {
+      const orderNumber = row['Name']
+      const productTags = row['Line items: Product Tags'] || ''
+      
+      // Finde Shop basierend auf Product Tags
+      const shopId = findShopByProductTags(shops, productTags)
+      
+      // Debug: Zeige Shop-Matching
+      if (productTags && shopId) {
+        const shopName = shops.find(s => s.id === shopId)?.name || 'Unbekannt'
+        console.log(`Product Tags "${productTags}" → Shop: ${shopName} (${shopId})`)
+      } else if (productTags && !shopId) {
+        console.warn(`Product Tags "${productTags}" → Kein Shop gefunden. Verfügbare Slugs:`, shops.map(s => s.slug))
+      }
+      
+      let orderKey: string
+      let customerName: string
+      let customerEmail: string | null
+      let className: string | null
+      let orderDate: string | null
+
+      if (orderNumber) {
+        // Gruppiere nach Order Number
+        orderKey = orderNumber.toString()
+        
+        customerName = 
+          row['Customer Name'] ||
+          (row['Customer: First name'] && row['Customer: Last name']
+            ? `${row['Customer: First name']} ${row['Customer: Last name']}`
+            : '') ||
+          ''
+        
+        customerEmail = row['Customer Email'] || row['Email'] || null
+        className = row['Class Name'] || row['Klasse'] || row['Line items: Custom attributes Klasse'] || null
+        const rawOrderDate = row['Order Date'] || row['Created at'] || row['Created at (UTC)'] || null
+        orderDate = rawOrderDate ? excelDateToISO(rawOrderDate) : null
+      } else {
+        // Fallback: Gruppiere nach Kunde
+        customerName = 
+          row['Customer Name'] ||
+          (row['Customer: First name'] && row['Customer: Last name']
+            ? `${row['Customer: First name']} ${row['Customer: Last name']}`
+            : '') ||
+          ''
+
+        if (!customerName.trim()) {
+          continue
+        }
+
+        customerEmail = row['Customer Email'] || row['Email'] || null
+        className = row['Class Name'] || row['Klasse'] || row['Line items: Custom attributes Klasse'] || null
+        const rawOrderDate = row['Order Date'] || row['Created at'] || row['Created at (UTC)'] || null
+        orderDate = rawOrderDate ? excelDateToISO(rawOrderDate) : null
+        
+        orderKey = `${customerName}-${customerEmail || 'no-email'}-${className || 'no-class'}`
+      }
+
+      if (!orderKey || (!orderNumber && !customerName.trim())) {
+        continue
+      }
+
+      // Wenn Order Number vorhanden, aber kein Customer Name in dieser Zeile, hole aus bestehender Order
+      if (orderNumber && !customerName.trim() && ordersMap.has(orderKey)) {
+        const existingOrder = ordersMap.get(orderKey)!
+        customerName = existingOrder.customerName
+        customerEmail = existingOrder.customerEmail
+        className = existingOrder.className
+        orderDate = existingOrder.orderDate
+        // Verwende shopId aus bestehender Order, oder setze neu gefundenen
+        if (!existingOrder.shopId && shopId) {
+          existingOrder.shopId = shopId
+        }
+        // Verwende shopId aus bestehender Order für diese Zeile
+        if (existingOrder.shopId) {
+          // Shop bereits zugeordnet, weiter mit Items
+        }
+      }
+
+      if (!orderNumber && !customerName.trim()) {
+        continue
+      }
+
+      if (!ordersMap.has(orderKey)) {
+        ordersMap.set(orderKey, {
+          shopId: shopId,
+          customerName: customerName.trim() || 'Unbekannt',
+          customerEmail: customerEmail ? (typeof customerEmail === 'string' ? customerEmail.trim() : String(customerEmail)) : null,
+          className: className ? (typeof className === 'string' ? className.trim() : String(className)) : null,
+          items: [],
+          totalAmount: 0,
+          orderDate: orderDate,
+        })
+      }
+
+      const order = ordersMap.get(orderKey)!
+
+      // Wenn shopId noch nicht gesetzt, versuche es jetzt zu setzen (aus dieser Zeile)
+      if (!order.shopId && shopId) {
+        order.shopId = shopId
+        console.log(`Shop-ID für Order ${orderKey} gesetzt: ${shopId}`)
+      } else if (!order.shopId) {
+        // Versuche Shop aus Product Tags dieser Zeile zu finden
+        const shopIdFromTags = findShopByProductTags(shops, productTags)
+        if (shopIdFromTags) {
+          order.shopId = shopIdFromTags
+          console.log(`Shop-ID für Order ${orderKey} aus Tags gesetzt: ${shopIdFromTags}`)
+        }
+      }
+
+      // Extrahiere Produktdaten
+      let productName = row['Product Name'] || row['Line items: Title'] || ''
+      
+      if (productName.includes('|')) {
+        productName = productName.split('|')[0].trim()
+      }
+      
+      const variantName = row['Product Variant'] || row['Line items: Variant title'] || null
+      const quantityStr = row['Quantity'] || row['Line items: Quantity'] || '1'
+      const quantity = parseInt(quantityStr.toString().replace(/[^\d]/g, '')) || 1
+      const unitPriceStr = row['Unit Price'] || row['Line items: Price'] || '0'
+      const unitPrice = parseFloat(unitPriceStr.toString().replace(',', '.').replace(/[^\d.-]/g, '')) || 0
+
+      if (!productName.trim() || quantity <= 0) {
+        continue
+      }
+
+      // Berechne Preis (vereinfacht, da wir Produkte nicht matchen müssen)
+      const finalPrice = unitPrice > 0 ? unitPrice : 0
+
+      order.items.push({
+        productName: productName.trim(),
+        variantName: variantName?.trim() || null,
+        quantity,
+        unitPrice: finalPrice,
+        productTags: productTags || undefined,
+      })
+
+      order.totalAmount += finalPrice * quantity
+    }
+
+    // Erstelle Bestellungen in Datenbank
+    const createdOrders = []
+    const errors = []
+    const shopStats = new Map<string, number>()
+
+    for (const [orderKey, orderData] of ordersMap) {
+      try {
+        // Überspringe Orders ohne Shop-Zuordnung
+        if (!orderData.shopId) {
+          errors.push({ orderKey, error: 'Kein Shop gefunden für Product Tags' })
+          continue
+        }
+
+        // Lade Produkte für diesen Shop (falls vorhanden)
+        const { data: products } = await supabase
+          .from('products')
+          .select('id, name, base_price')
+          .eq('shop_id', orderData.shopId)
+          .eq('active', true)
+
+        const productsMap = new Map(products?.map(p => [p.name.toLowerCase().trim(), p]) || [])
+        
+        // Debug: Zeige verfügbare Produkte
+        if (products && products.length > 0) {
+          console.log(`Shop ${orderData.shopId} hat ${products.length} Produkt(e):`, products.map(p => p.name))
+        } else {
+          console.log(`Shop ${orderData.shopId} hat noch keine Produkte - werden automatisch erstellt`)
+        }
+
+        // Lade Varianten
+        const productIds = products?.map(p => p.id) || []
+        const { data: variants } = await supabase
+          .from('product_variants')
+          .select('id, product_id, name, additional_price')
+          .in('product_id', productIds)
+          .eq('active', true)
+
+        const variantsMap = new Map<string, NonNullable<typeof variants>[0]>()
+        variants?.forEach(v => {
+          const key = `${v.product_id}-${v.name.toLowerCase().trim()}`
+          variantsMap.set(key, v)
+        })
+
+        // Formatiere total_amount
+        const totalAmount = Math.round(orderData.totalAmount * 100) / 100
+        
+        // Erstelle Order
+        const { data: order, error: orderError } = await supabase
+          .from('orders')
+          .insert([{
+            shop_id: orderData.shopId,
+            customer_name: orderData.customerName,
+            customer_email: orderData.customerEmail || null,
+            class_name: orderData.className || null,
+            status: 'pending',
+            total_amount: totalAmount,
+            created_at: orderData.orderDate || new Date().toISOString(),
+          }])
+          .select()
+          .single()
+
+        if (orderError) {
+          console.error('Order insertion error:', orderError)
+          errors.push({ orderKey, error: orderError.message })
+          continue
+        }
+
+        if (!order) {
+          errors.push({ orderKey, error: 'Order wurde nicht erstellt' })
+          continue
+        }
+
+        // Erstelle Order Items
+        const orderItems = []
+        const createdProducts: string[] = []
+        
+        for (const item of orderData.items) {
+          // Versuche Produkt zu finden
+          const normalizedProductName = item.productName.toLowerCase().trim()
+          let product = productsMap.get(normalizedProductName)
+          
+          if (!product) {
+            // Versuche Teilübereinstimmung
+            for (const [key, prod] of productsMap.entries()) {
+              if (normalizedProductName.includes(key) || key.includes(normalizedProductName)) {
+                product = prod
+                break
+              }
+            }
+          }
+
+          // Wenn Produkt nicht gefunden, erstelle es automatisch
+          if (!product) {
+            const productName = item.productName.trim()
+            const basePrice = item.unitPrice > 0 ? item.unitPrice : 0
+            
+            console.log(`Erstelle Produkt automatisch: "${productName}" im Shop ${orderData.shopId} mit Preis ${basePrice}`)
+            
+            const { data: newProduct, error: productError } = await supabase
+              .from('products')
+              .insert([{
+                shop_id: orderData.shopId,
+                name: productName,
+                base_price: basePrice,
+                active: true,
+                sort_index: 0,
+              }])
+              .select()
+              .single()
+
+            if (productError) {
+              console.error(`Fehler beim Erstellen des Produkts "${productName}":`, productError)
+              // Überspringe dieses Item, aber erstelle trotzdem die Order
+              continue
+            }
+
+            if (newProduct) {
+              product = newProduct
+              productsMap.set(normalizedProductName, product)
+              createdProducts.push(productName)
+              console.log(`✓ Produkt erstellt: "${productName}" (ID: ${product.id})`)
+            } else {
+              // Produkt konnte nicht erstellt werden - überspringe Item
+              console.error(`Produkt "${productName}" konnte nicht erstellt werden`)
+              continue
+            }
+          }
+
+          let variantId = null
+          if (item.variantName) {
+            const variantName = item.variantName.trim()
+            const variantKey = `${product.id}-${variantName.toLowerCase().trim()}`
+            let variant = variantsMap.get(variantKey)
+            
+            // Wenn Variante nicht gefunden, erstelle sie automatisch
+            if (!variant) {
+              console.log(`Erstelle Variante automatisch: "${variantName}" für Produkt "${product.name}"`)
+              
+              const { data: newVariant, error: variantError } = await supabase
+                .from('product_variants')
+                .insert([{
+                  product_id: product.id,
+                  name: variantName,
+                  active: true,
+                  additional_price: 0,
+                }])
+                .select()
+                .single()
+
+              if (variantError) {
+                console.error(`Fehler beim Erstellen der Variante "${variantName}":`, variantError)
+              } else if (newVariant) {
+                variant = newVariant
+                variantsMap.set(variantKey, variant)
+                console.log(`✓ Variante erstellt: "${variantName}" (ID: ${variant.id})`)
+              }
+            }
+            
+            if (variant) {
+              variantId = variant.id
+            }
+          }
+
+          const quantity = Math.floor(Math.abs(item.quantity)) || 1
+          const unitPrice = Math.round(item.unitPrice * 100) / 100
+          const lineTotal = Math.round(unitPrice * quantity * 100) / 100
+
+          orderItems.push({
+            order_id: order.id,
+            product_id: product.id,
+            variant_id: variantId,
+            quantity: quantity,
+            unit_price: unitPrice,
+            line_total: lineTotal,
+          })
+        }
+
+        if (orderItems.length > 0) {
+          const { error: itemsError } = await supabase
+            .from('order_items')
+            .insert(orderItems)
+
+          if (itemsError) {
+            console.error('Order items insertion error:', itemsError)
+            console.error('Order items that failed:', JSON.stringify(orderItems, null, 2))
+            errors.push({ orderKey, error: `Order Items: ${itemsError.message}` })
+            await supabase.from('orders').delete().eq('id', order.id)
+            continue
+          }
+          
+          console.log(`✓ Order ${orderKey}: ${orderItems.length} Item(s) erfolgreich erstellt`)
+          
+          // Info wenn Produkte automatisch erstellt wurden
+          if (createdProducts.length > 0) {
+            console.log(`Order ${orderKey}: ${createdProducts.length} Produkt(e) automatisch erstellt:`, createdProducts)
+          }
+        } else {
+          // Wenn keine Items erstellt werden konnten, lösche die Order
+          console.warn(`⚠ Order ${orderKey}: Keine Items konnten erstellt werden. Ursprüngliche Items:`, orderData.items.length)
+          await supabase.from('orders').delete().eq('id', order.id)
+          errors.push({ orderKey, error: `Order hat keine gültigen Items - ${orderData.items.length} Item(s) in CSV, aber 0 konnten verarbeitet werden` })
+          continue
+        }
+
+        createdOrders.push({
+          id: order.id,
+          shopId: orderData.shopId,
+          customerName: orderData.customerName,
+          totalAmount: totalAmount,
+          itemCount: orderItems.length,
+        })
+
+        // Statistiken
+        const shopName = shops.find(s => s.id === orderData.shopId)?.name || 'Unbekannt'
+        shopStats.set(shopName, (shopStats.get(shopName) || 0) + 1)
+      } catch (error: any) {
+        console.error(`Error processing order ${orderKey}:`, error)
+        errors.push({ orderKey, error: error.message })
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      imported: createdOrders.length,
+      skipped: ordersMap.size - createdOrders.length,
+      orders: createdOrders,
+      shopStats: Object.fromEntries(shopStats),
+      errors: errors.length > 0 ? errors : undefined,
+    })
+  } catch (error: any) {
+    console.error('Error uploading orders:', error)
+    return NextResponse.json(
+      { error: error.message || 'Fehler beim Hochladen der Bestellungen' },
+      { status: 500 }
+    )
+  }
+}
+

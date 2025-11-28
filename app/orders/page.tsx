@@ -23,6 +23,13 @@ import {
   AccordionDetails,
   Grid,
   Divider,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
+  Alert,
+  CircularProgress,
 } from '@mui/material'
 import { supabase } from '@/lib/supabase'
 import { Database } from '@/types/database'
@@ -31,12 +38,17 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import StoreIcon from '@mui/icons-material/Store'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
+import CloseIcon from '@mui/icons-material/Close'
 
 type Order = Database['public']['Tables']['orders']['Row']
 type Shop = Database['public']['Tables']['shops']['Row']
+type OrderItem = Database['public']['Tables']['order_items']['Row']
+type Product = Database['public']['Tables']['products']['Row']
 
 interface OrderWithShop extends Order {
   shop: Shop | null
+  items?: Array<OrderItem & { product?: Product }>
 }
 
 type OrderGroup = {
@@ -53,6 +65,17 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderWithShop[]>([])
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'all' | 'grouped'>('grouped')
+  const [csvUploadDialogOpen, setCsvUploadDialogOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<{
+    success: boolean
+    imported?: number
+    skipped?: number
+    errors?: Array<{ orderKey: string; error: string }>
+    message?: string
+    shopStats?: Record<string, number>
+  } | null>(null)
 
   useEffect(() => {
     loadOrders()
@@ -75,13 +98,54 @@ export default function OrdersPage() {
 
       if (shopsError) throw shopsError
 
-      // Create a map of shops by id
-      const shopsMap = new Map((shopsData || []).map(shop => [shop.id, shop]))
+      // Load order items with products
+      const orderIds = (ordersData || []).map(o => o.id)
+      
+      let orderItemsData: any[] = []
+      if (orderIds.length > 0) {
+        const { data: itemsData } = await supabase
+          .from('order_items')
+          .select('*')
+          .in('order_id', orderIds)
+        
+        if (itemsData) {
+          // Load products separately
+          const productIds = Array.from(new Set(itemsData.map(item => item.product_id)))
+          const { data: productsData } = await supabase
+            .from('products')
+            .select('id, name')
+            .in('id', productIds)
+          
+          const productsMap = new Map(productsData?.map(p => [p.id, p]) || [])
+          
+          // Combine items with products
+          orderItemsData = itemsData.map(item => ({
+            ...item,
+            product: productsMap.get(item.product_id),
+          }))
+        }
+      }
 
-      // Combine orders with their shops
+      // Create maps
+      const shopsMap = new Map((shopsData || []).map(shop => [shop.id, shop]))
+      const itemsByOrderId = new Map<string, Array<OrderItem & { product?: Product }>>()
+      
+      // Group items by order_id
+      orderItemsData?.forEach((item: any) => {
+        if (!itemsByOrderId.has(item.order_id)) {
+          itemsByOrderId.set(item.order_id, [])
+        }
+        itemsByOrderId.get(item.order_id)!.push({
+          ...item,
+          product: item.product || undefined,
+        })
+      })
+
+      // Combine orders with their shops and items
       const ordersWithShop = (ordersData || []).map(order => ({
         ...order,
         shop: shopsMap.get(order.shop_id) || null,
+        items: itemsByOrderId.get(order.id) || [],
       }))
       
       setOrders(ordersWithShop)
@@ -262,6 +326,24 @@ export default function OrdersPage() {
         </TableCell>
         <TableCell sx={{ py: 2.5 }}>{order.class_name || '-'}</TableCell>
         <TableCell sx={{ py: 2.5 }}>
+          {order.items && order.items.length > 0 ? (
+            <Box>
+              {order.items.slice(0, 2).map((item, idx) => (
+                <Typography key={idx} variant="body2" sx={{ fontSize: '0.75rem' }}>
+                  {item.product?.name || 'Unbekannt'} {item.quantity > 1 && `(${item.quantity}x)`}
+                </Typography>
+              ))}
+              {order.items.length > 2 && (
+                <Typography variant="caption" color="text.secondary">
+                  +{order.items.length - 2} weitere
+                </Typography>
+              )}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">-</Typography>
+          )}
+        </TableCell>
+        <TableCell sx={{ py: 2.5 }}>
           <Chip
             label={order.status}
             color={getStatusColor(order.status) as any}
@@ -311,24 +393,34 @@ export default function OrdersPage() {
   return (
     <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
       <Container maxWidth="xl" sx={{ py: 6 }}>
-        <Box sx={{ mb: 5 }}>
-          <Typography 
-            variant="h3" 
-            component="h1"
-            sx={{ 
-              fontWeight: 700,
-              mb: 1,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}
+        <Box sx={{ mb: 5, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <Typography 
+              variant="h3" 
+              component="h1"
+              sx={{ 
+                fontWeight: 700,
+                mb: 1,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              Bestellübersicht
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Übersicht aller Bestellungen nach Shop-Öffnungszeiten
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            startIcon={<UploadFileIcon />}
+            onClick={() => setCsvUploadDialogOpen(true)}
+            sx={{ mt: 1 }}
           >
-            Bestellübersicht
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Übersicht aller Bestellungen nach Shop-Öffnungszeiten
-          </Typography>
+            Bestellungen hochladen
+          </Button>
         </Box>
 
         {loading ? (
@@ -473,6 +565,7 @@ export default function OrdersPage() {
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>Kunde</TableCell>
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>E-Mail</TableCell>
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>Klasse</TableCell>
+                                <TableCell sx={{ fontWeight: 600, py: 2 }}>Produkte</TableCell>
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>Status</TableCell>
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>Betrag</TableCell>
                                 <TableCell sx={{ fontWeight: 600, py: 2 }}>Datum</TableCell>
@@ -494,17 +587,18 @@ export default function OrdersPage() {
                 <TableContainer>
                   <Table>
                     <TableHead>
-                      <TableRow sx={{ background: '#f8fafc' }}>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Order-ID</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Shop</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Kunde</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>E-Mail</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Klasse</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Status</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Betrag</TableCell>
-                        <TableCell sx={{ fontWeight: 600, py: 2 }}>Datum</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 600, py: 2 }}>Aktionen</TableCell>
-                      </TableRow>
+                        <TableRow sx={{ background: '#f8fafc' }}>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Order-ID</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Shop</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Kunde</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>E-Mail</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Klasse</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Produkte</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Status</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Betrag</TableCell>
+                          <TableCell sx={{ fontWeight: 600, py: 2 }}>Datum</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 600, py: 2 }}>Aktionen</TableCell>
+                        </TableRow>
                     </TableHead>
                     <TableBody>
                       {orders.map((order) => (
@@ -538,6 +632,24 @@ export default function OrdersPage() {
                             </Typography>
                           </TableCell>
                           <TableCell sx={{ py: 2.5 }}>{order.class_name || '-'}</TableCell>
+                          <TableCell sx={{ py: 2.5 }}>
+                            {order.items && order.items.length > 0 ? (
+                              <Box>
+                                {order.items.slice(0, 2).map((item, idx) => (
+                                  <Typography key={idx} variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                    {item.product?.name || 'Unbekannt'} {item.quantity > 1 && `(${item.quantity}x)`}
+                                  </Typography>
+                                ))}
+                                {order.items.length > 2 && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    +{order.items.length - 2} weitere
+                                  </Typography>
+                                )}
+                              </Box>
+                            ) : (
+                              <Typography variant="body2" color="text.secondary">-</Typography>
+                            )}
+                          </TableCell>
                           <TableCell sx={{ py: 2.5 }}>
                             <Chip
                               label={order.status}
@@ -590,6 +702,206 @@ export default function OrdersPage() {
             )}
           </>
         )}
+
+        {/* CSV Upload Dialog */}
+        <Dialog open={csvUploadDialogOpen} onClose={() => !uploading && setCsvUploadDialogOpen(false)} maxWidth="sm" fullWidth>
+          <DialogTitle>
+            Bestellungen aus CSV/Excel hochladen
+            <IconButton
+              aria-label="close"
+              onClick={() => !uploading && setCsvUploadDialogOpen(false)}
+              disabled={uploading}
+              sx={{
+                position: 'absolute',
+                right: 8,
+                top: 8,
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ pt: 2 }}>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="body2" fontWeight="bold" sx={{ mb: 1 }}>
+                  Automatische Shop-Zuordnung
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  Bestellungen werden automatisch Shops zugeordnet basierend auf der Spalte "Line items: Product Tags".
+                  Die Tags werden mit den Shop-Slugs abgeglichen.
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  Die Datei (CSV oder Excel) sollte folgende Spalten enthalten:
+                </Typography>
+                Die Datei (CSV oder Excel) sollte folgende Spalten enthalten:
+                <br />
+                • <strong>Line items: Product Tags</strong> (wichtig: muss Shop-Slug enthalten)
+                <br />
+                • Name (Order Number, z.B. "#2016") - für Excel-Dateien
+                <br />
+                • Customer: First name + Customer: Last name (oder Customer Name)
+                <br />
+                • Email
+                <br />
+                • Line items: Custom attributes Klasse (oder Class Name, Klasse)
+                <br />
+                • Line items: Title (Product Name)
+                <br />
+                • Line items: Variant title (optional, Product Variant)
+                <br />
+                • Line items: Quantity (Quantity)
+                <br />
+                • Line items: Price (optional, Unit Price)
+                <br />
+                • Created at (optional, Order Date)
+              </Alert>
+
+              <input
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                style={{ display: 'none' }}
+                id="csv-file-input"
+                type="file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) {
+                    setCsvFile(file)
+                    setUploadResult(null)
+                  }
+                }}
+                disabled={uploading}
+              />
+              <label htmlFor="csv-file-input">
+                <Button
+                  variant="outlined"
+                  component="span"
+                  fullWidth
+                  startIcon={<UploadFileIcon />}
+                  disabled={uploading}
+                  sx={{ mb: 2 }}
+                >
+                  {csvFile ? csvFile.name : 'CSV- oder Excel-Datei auswählen'}
+                </Button>
+              </label>
+
+              {uploadResult && (
+                <Alert
+                  severity={uploadResult.success ? 'success' : 'error'}
+                  sx={{ mt: 2 }}
+                  onClose={() => setUploadResult(null)}
+                >
+                  {uploadResult.success ? (
+                    <Box>
+                      <Typography variant="body2" fontWeight="bold">
+                        Erfolgreich importiert!
+                      </Typography>
+                      <Typography variant="body2">
+                        {uploadResult.imported} Bestellung(en) importiert
+                        {uploadResult.skipped && uploadResult.skipped > 0 && (
+                          <>, {uploadResult.skipped} übersprungen</>
+                        )}
+                      </Typography>
+                      {uploadResult.shopStats && Object.keys(uploadResult.shopStats).length > 0 && (
+                        <Box sx={{ mt: 1 }}>
+                          <Typography variant="caption" fontWeight="bold">
+                            Nach Shop:
+                          </Typography>
+                          {Object.entries(uploadResult.shopStats).map(([shopName, count]) => (
+                            <Typography key={shopName} variant="caption" display="block">
+                              • {shopName}: {count} Bestellung(en)
+                            </Typography>
+                          ))}
+                        </Box>
+                      )}
+                      {uploadResult.errors && uploadResult.errors.length > 0 && (
+                        <Box sx={{ mt: 1 }}>
+                          <Typography variant="caption" fontWeight="bold">
+                            Fehler:
+                          </Typography>
+                          {uploadResult.errors.slice(0, 5).map((err, idx) => (
+                            <Typography key={idx} variant="caption" display="block">
+                              • {err.error}
+                            </Typography>
+                          ))}
+                          {uploadResult.errors.length > 5 && (
+                            <Typography variant="caption" display="block">
+                              ... und {uploadResult.errors.length - 5} weitere
+                            </Typography>
+                          )}
+                        </Box>
+                      )}
+                    </Box>
+                  ) : (
+                    <Typography variant="body2">
+                      {uploadResult.message || 'Fehler beim Hochladen'}
+                    </Typography>
+                  )}
+                </Alert>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setCsvUploadDialogOpen(false)} disabled={uploading}>
+              Schließen
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!csvFile) {
+                  setUploadResult({
+                    success: false,
+                    message: 'Bitte wählen Sie eine Datei aus',
+                  })
+                  return
+                }
+
+                setUploading(true)
+                setUploadResult(null)
+
+                try {
+                  const formData = new FormData()
+                  formData.append('file', csvFile)
+
+                  const response = await fetch(`/api/orders/upload`, {
+                    method: 'POST',
+                    body: formData,
+                  })
+
+                  const data = await response.json()
+
+                  if (!response.ok) {
+                    setUploadResult({
+                      success: false,
+                      message: data.error || 'Fehler beim Hochladen',
+                    })
+                    return
+                  }
+
+                  setUploadResult({
+                    success: true,
+                    imported: data.imported,
+                    skipped: data.skipped,
+                    errors: data.errors,
+                    shopStats: data.shopStats,
+                  })
+
+                  // Lade Bestellungen neu
+                  await loadOrders()
+                } catch (error: any) {
+                  setUploadResult({
+                    success: false,
+                    message: error.message || 'Fehler beim Hochladen der Datei',
+                  })
+                } finally {
+                  setUploading(false)
+                }
+              }}
+              variant="contained"
+              disabled={!csvFile || uploading}
+              startIcon={uploading ? <CircularProgress size={20} /> : <UploadFileIcon />}
+            >
+              {uploading ? 'Lade hoch...' : 'Hochladen'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Container>
     </Box>
   )
