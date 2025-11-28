@@ -40,6 +40,7 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import InfoIcon from '@mui/icons-material/Info'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Snackbar from '@mui/material/Snackbar'
 
 type Shop = Database['public']['Tables']['shops']['Row']
@@ -78,6 +79,16 @@ export default function ShopDetail() {
     shop_open_at: '',
     shop_close_at: '',
   })
+  const [csvUploadDialogOpen, setCsvUploadDialogOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<{
+    success: boolean
+    imported?: number
+    skipped?: number
+    errors?: Array<{ orderKey: string; error: string }>
+    message?: string
+  } | null>(null)
 
   useEffect(() => {
     if (params.id) {
@@ -652,6 +663,14 @@ export default function ShopDetail() {
           Produkte
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          <Tooltip title="Bestellungen aus CSV hochladen">
+            <IconButton
+              color="primary"
+              onClick={() => setCsvUploadDialogOpen(true)}
+            >
+              <UploadFileIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Shopify Credentials konfigurieren">
             <IconButton
               color="primary"
@@ -950,6 +969,179 @@ export default function ShopDetail() {
             startIcon={deleting ? <CircularProgress size={20} /> : <DeleteIcon />}
           >
             {deleting ? 'Lösche...' : 'Löschen'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* CSV Upload Dialog */}
+      <Dialog open={csvUploadDialogOpen} onClose={() => !uploading && setCsvUploadDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Bestellungen aus CSV hochladen
+          <IconButton
+            aria-label="close"
+            onClick={() => !uploading && setCsvUploadDialogOpen(false)}
+            disabled={uploading}
+            sx={{
+              position: 'absolute',
+              right: 8,
+              top: 8,
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Die CSV-Datei sollte folgende Spalten enthalten:
+              <br />
+              • Customer Name (oder Customer: First name + Customer: Last name)
+              <br />
+              • Customer Email (oder Email)
+              <br />
+              • Class Name (oder Klasse)
+              <br />
+              • Product Name (oder Line items: Title)
+              <br />
+              • Product Variant (optional, oder Line items: Variant title)
+              <br />
+              • Quantity (oder Line items: Quantity)
+              <br />
+              • Unit Price (optional, oder Line items: Price)
+              <br />
+              • Order Date (optional, oder Created at)
+            </Alert>
+
+            <input
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              id="csv-file-input"
+              type="file"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  setCsvFile(file)
+                  setUploadResult(null)
+                }
+              }}
+              disabled={uploading}
+            />
+            <label htmlFor="csv-file-input">
+              <Button
+                variant="outlined"
+                component="span"
+                fullWidth
+                startIcon={<UploadFileIcon />}
+                disabled={uploading}
+                sx={{ mb: 2 }}
+              >
+                {csvFile ? csvFile.name : 'CSV-Datei auswählen'}
+              </Button>
+            </label>
+
+            {uploadResult && (
+              <Alert
+                severity={uploadResult.success ? 'success' : 'error'}
+                sx={{ mt: 2 }}
+                onClose={() => setUploadResult(null)}
+              >
+                {uploadResult.success ? (
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">
+                      Erfolgreich importiert!
+                    </Typography>
+                    <Typography variant="body2">
+                      {uploadResult.imported} Bestellung(en) importiert
+                      {uploadResult.skipped && uploadResult.skipped > 0 && (
+                        <>, {uploadResult.skipped} übersprungen</>
+                      )}
+                    </Typography>
+                    {uploadResult.errors && uploadResult.errors.length > 0 && (
+                      <Box sx={{ mt: 1 }}>
+                        <Typography variant="caption" fontWeight="bold">
+                          Fehler:
+                        </Typography>
+                        {uploadResult.errors.slice(0, 5).map((err, idx) => (
+                          <Typography key={idx} variant="caption" display="block">
+                            • {err.error}
+                          </Typography>
+                        ))}
+                        {uploadResult.errors.length > 5 && (
+                          <Typography variant="caption" display="block">
+                            ... und {uploadResult.errors.length - 5} weitere
+                          </Typography>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                ) : (
+                  <Typography variant="body2">
+                    {uploadResult.message || 'Fehler beim Hochladen'}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCsvUploadDialogOpen(false)} disabled={uploading}>
+            Schließen
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!csvFile) {
+                setUploadResult({
+                  success: false,
+                  message: 'Bitte wählen Sie eine CSV-Datei aus',
+                })
+                return
+              }
+
+              setUploading(true)
+              setUploadResult(null)
+
+              try {
+                const formData = new FormData()
+                formData.append('file', csvFile)
+
+                const response = await fetch(`/api/shops/${shop.id}/upload-orders`, {
+                  method: 'POST',
+                  body: formData,
+                })
+
+                const data = await response.json()
+
+                if (!response.ok) {
+                  setUploadResult({
+                    success: false,
+                    message: data.error || 'Fehler beim Hochladen',
+                  })
+                  return
+                }
+
+                setUploadResult({
+                  success: true,
+                  imported: data.imported,
+                  skipped: data.skipped,
+                  errors: data.errors,
+                })
+
+                // Lade Bestellungen neu falls vorhanden
+                // (könnte hier die Orders-Seite neu laden, aber das ist optional)
+              } catch (error: any) {
+                setUploadResult({
+                  success: false,
+                  message: error.message || 'Fehler beim Hochladen der Datei',
+                })
+              } finally {
+                setUploading(false)
+              }
+            }}
+            variant="contained"
+            disabled={!csvFile || uploading}
+            startIcon={uploading ? <CircularProgress size={20} /> : <UploadFileIcon />}
+          >
+            {uploading ? 'Lade hoch...' : 'Hochladen'}
           </Button>
         </DialogActions>
       </Dialog>
