@@ -140,6 +140,8 @@ export default function Home() {
         return 'Lead'
       case 'active':
         return 'Aktiv'
+      case 'production':
+        return 'Produktion'
       case 'existing':
         return 'Bestand'
       default:
@@ -153,6 +155,8 @@ export default function Home() {
         return 'warning'
       case 'active':
         return 'success'
+      case 'production':
+        return 'secondary'
       case 'existing':
         return 'info'
       default:
@@ -164,6 +168,7 @@ export default function Home() {
     return {
       leads: schools.filter((s) => s.status === 'lead'),
       active: schools.filter((s) => s.status === 'active'),
+      production: schools.filter((s) => s.status === 'production'),
       existing: schools.filter((s) => s.status === 'existing'),
     }
   }
@@ -177,7 +182,7 @@ export default function Home() {
     setStatusMenuAnchor(null)
   }
 
-  async function handleStatusChange(newStatus: 'lead' | 'active' | 'existing') {
+  async function handleStatusChange(newStatus: 'lead' | 'active' | 'production' | 'existing') {
     if (!statusMenuAnchor) return
     
     const schoolId = statusMenuAnchor.schoolId
@@ -434,6 +439,7 @@ export default function Home() {
               >
                 <Tab label={`Leads (${categorizeSchools(schools).leads.length})`} />
                 <Tab label={`Aktiv (${categorizeSchools(schools).active.length})`} />
+                <Tab label={`Produktion (${categorizeSchools(schools).production.length})`} />
                 <Tab label={`Bestand (${categorizeSchools(schools).existing.length})`} />
               </Tabs>
             </Box>
@@ -450,6 +456,9 @@ export default function Home() {
                   schoolsToShow = categorized.active
                   break
                 case 2:
+                  schoolsToShow = categorized.production
+                  break
+                case 3:
                   schoolsToShow = categorized.existing
                   break
                 default:
@@ -479,12 +488,14 @@ export default function Home() {
                         <Typography variant="h6" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
                           {activeTab === 0 && 'Keine Leads vorhanden'}
                           {activeTab === 1 && 'Keine aktiven Schulen vorhanden'}
-                          {activeTab === 2 && 'Keine Bestandsschulen vorhanden'}
+                          {activeTab === 2 && 'Keine Schulen in Produktion vorhanden'}
+                          {activeTab === 3 && 'Keine Bestandsschulen vorhanden'}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           {activeTab === 0 && 'Erstellen Sie eine neue Schule, um zu beginnen.'}
                           {activeTab === 1 && 'Aktive Schulen werden hier angezeigt.'}
-                          {activeTab === 2 && 'Bestandsschulen werden hier angezeigt.'}
+                          {activeTab === 2 && 'Schulen in Produktion werden hier angezeigt.'}
+                          {activeTab === 3 && 'Bestandsschulen werden hier angezeigt.'}
                         </Typography>
                       </Box>
                     </CardContent>
@@ -496,6 +507,26 @@ export default function Home() {
             })()}
           </>
         )}
+
+        {/* Status Menu */}
+        <Menu
+          anchorEl={statusMenuAnchor?.element || null}
+          open={Boolean(statusMenuAnchor)}
+          onClose={handleStatusMenuClose}
+        >
+          <MenuItem onClick={() => handleStatusChange('lead')}>
+            Lead
+          </MenuItem>
+          <MenuItem onClick={() => handleStatusChange('active')}>
+            Aktiv
+          </MenuItem>
+          <MenuItem onClick={() => handleStatusChange('production')}>
+            Produktion
+          </MenuItem>
+          <MenuItem onClick={() => handleStatusChange('existing')}>
+            Bestand
+          </MenuItem>
+        </Menu>
       </Container>
     </Box>
   )

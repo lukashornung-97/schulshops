@@ -39,6 +39,8 @@ type Shop = Database['public']['Tables']['shops']['Row']
 interface OrderItemWithProduct extends OrderItem {
   product?: Product
   variant?: ProductVariant | null
+  size?: string | null
+  color?: string | null
 }
 
 interface OrderWithDetails extends Order {
@@ -119,13 +121,97 @@ export default function OrderDetailPage() {
           console.error('Error loading variants:', variantsError)
         }
 
+        // Lade auch alle Varianten für die Produkte, um Größe und Farbe zu finden
+        const { data: allVariantsData } = productIds.length > 0
+          ? await supabase
+              .from('product_variants')
+              .select('*')
+              .in('product_id', productIds)
+              .eq('active', true)
+          : { data: null }
+
         const productsMap = new Map(productsData?.map(p => [p.id, p]) || [])
         const variantsMap = new Map(variantsData?.map(v => [v.id, v]) || [])
+        
+        // Erstelle Maps für Größen- und Farb-Varianten pro Produkt
+        const sizeVariantsMap = new Map<string, ProductVariant[]>()
+        const colorVariantsMap = new Map<string, ProductVariant[]>()
+        
+        allVariantsData?.forEach(v => {
+          if (v.name && v.name.trim() && !v.color_name) {
+            // Größen-Variante
+            const key = v.product_id
+            if (!sizeVariantsMap.has(key)) {
+              sizeVariantsMap.set(key, [])
+            }
+            sizeVariantsMap.get(key)!.push(v)
+          }
+          if (v.color_name && v.color_name.trim()) {
+            // Farb-Variante
+            const key = v.product_id
+            if (!colorVariantsMap.has(key)) {
+              colorVariantsMap.set(key, [])
+            }
+            colorVariantsMap.get(key)!.push(v)
+          }
+        })
 
         // Combine items with products and variants
         const itemsWithProducts: OrderItemWithProduct[] = itemsData.map(item => {
           const product = productsMap.get(item.product_id)
           const variant = item.variant_id ? variantsMap.get(item.variant_id) || null : null
+          
+          // Finde Größe und Farbe basierend auf der Variante
+          let size: string | null = null
+          let color: string | null = null
+          
+          if (variant) {
+            // Kombinations-Variante: name enthält Größe, color_name enthält Farbe
+            if (variant.name && variant.name.trim() && variant.color_name && variant.color_name.trim()) {
+              size = variant.name
+              color = variant.color_name
+            }
+            // Prüfe ob Variante im Format "Größe / Farbe" im name-Feld gespeichert ist (Fallback für alte Daten)
+            else if (variant.name && variant.name.includes('/')) {
+              // Parse Format "Größe / Farbe" - splitte am "/"
+              const parts = variant.name.split('/').map(s => s.trim())
+              if (parts.length >= 2) {
+                size = parts[0] || null
+                color = parts[1] || null
+              } else if (parts.length === 1) {
+                // Nur ein Teil vorhanden - prüfe ob es Größe oder Farbe ist
+                const singleValue = parts[0]
+                if (/^(XS|S|M|L|XL|XXL|XXXL|\d+)$/i.test(singleValue)) {
+                  size = singleValue
+                } else {
+                  color = singleValue
+                }
+              }
+            } else if (variant.name && variant.name.trim() && !variant.color_name) {
+              // Es ist eine reine Größen-Variante
+              size = variant.name
+            } else if (variant.color_name && variant.color_name.trim()) {
+              // Es ist eine Farb-Variante
+              color = variant.color_name
+            }
+          }
+          
+          // Versuche die fehlende Variante zu finden, falls nur eine vorhanden ist
+          if (size && !color) {
+            // Wir haben eine Größe, versuche eine Farbe zu finden
+            const colorVariants = colorVariantsMap.get(item.product_id) || []
+            if (colorVariants.length === 1) {
+              // Nur eine Farbe verfügbar - verwende diese
+              color = colorVariants[0].color_name || null
+            }
+          } else if (color && !size) {
+            // Wir haben eine Farbe, versuche eine Größe zu finden
+            const sizeVariants = sizeVariantsMap.get(item.product_id) || []
+            if (sizeVariants.length === 1) {
+              // Nur eine Größe verfügbar - verwende diese
+              size = sizeVariants[0].name || null
+            }
+          }
           
           if (!product) {
             console.warn(`Product not found for order item ${item.id}: product_id=${item.product_id}`)
@@ -135,6 +221,8 @@ export default function OrderDetailPage() {
             ...item,
             product,
             variant,
+            size,
+            color,
           }
         })
 
@@ -391,7 +479,8 @@ export default function OrderDetailPage() {
                   <TableHead>
                     <TableRow sx={{ background: '#f8fafc' }}>
                       <TableCell sx={{ fontWeight: 600 }}>Produkt</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Variante</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Größe</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Farbe</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 600 }}>Menge</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 600 }}>Einzelpreis</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 600 }}>Gesamtpreis</TableCell>
@@ -411,9 +500,20 @@ export default function OrderDetailPage() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {item.variant ? (
-                            <Typography variant="body2">
-                              {item.variant.name}
+                          {item.size ? (
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {item.size}
+                            </Typography>
+                          ) : (
+                            <Typography variant="body2" color="text.secondary">
+                              -
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {item.color ? (
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {item.color}
                             </Typography>
                           ) : (
                             <Typography variant="body2" color="text.secondary">
@@ -439,7 +539,7 @@ export default function OrderDetailPage() {
                       </TableRow>
                     ))}
                     <TableRow sx={{ background: '#f8fafc' }}>
-                      <TableCell colSpan={4} align="right" sx={{ fontWeight: 600, py: 2 }}>
+                      <TableCell colSpan={5} align="right" sx={{ fontWeight: 600, py: 2 }}>
                         Gesamtbetrag:
                       </TableCell>
                       <TableCell align="right" sx={{ fontWeight: 700, py: 2, fontSize: '1.1rem' }}>

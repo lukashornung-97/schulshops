@@ -17,7 +17,7 @@ export interface Database {
           city: string | null
           country: string | null
           contact_id: string | null
-          status: 'lead' | 'active' | 'existing'
+          status: 'lead' | 'active' | 'production' | 'existing'
           created_at: string
         }
         Insert: {
@@ -27,7 +27,7 @@ export interface Database {
           city?: string | null
           country?: string | null
           contact_id?: string | null
-          status?: 'lead' | 'active' | 'existing'
+          status?: 'lead' | 'active' | 'production' | 'existing'
           created_at?: string
         }
         Update: {
@@ -37,7 +37,7 @@ export interface Database {
           city?: string | null
           country?: string | null
           contact_id?: string | null
-          status?: 'lead' | 'active' | 'existing'
+          status?: 'lead' | 'active' | 'production' | 'existing'
           created_at?: string
         }
       }

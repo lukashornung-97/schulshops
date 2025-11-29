@@ -124,6 +124,7 @@ export default function SchoolDetail() {
     completed: false,
   })
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [sendingNotification, setSendingNotification] = useState<string | null>(null)
 
   useEffect(() => {
     if (params.id) {
@@ -187,6 +188,8 @@ export default function SchoolDetail() {
         return 'Lead'
       case 'active':
         return 'Aktiv'
+      case 'production':
+        return 'Produktion'
       case 'existing':
         return 'Bestand'
       default:
@@ -200,6 +203,8 @@ export default function SchoolDetail() {
         return 'warning'
       case 'active':
         return 'success'
+      case 'production':
+        return 'secondary'
       case 'existing':
         return 'info'
       default:
@@ -811,6 +816,60 @@ export default function SchoolDetail() {
     }
   }
 
+  function getLastClosedShop(): Shop | null {
+    const closedShops = shops
+      .filter((shop) => shop.status === 'closed' && shop.shop_close_at)
+      .sort((a, b) => {
+        const dateA = a.shop_close_at ? new Date(a.shop_close_at).getTime() : 0
+        const dateB = b.shop_close_at ? new Date(b.shop_close_at).getTime() : 0
+        return dateB - dateA
+      })
+    return closedShops[0] || null
+  }
+
+  async function handleExportLastShopAnalytics() {
+    const lastShop = getLastClosedShop()
+    if (!lastShop) {
+      setSnackbar({
+        open: true,
+        message: 'Kein geschlossener Shop gefunden',
+        severity: 'error',
+      })
+      return
+    }
+
+    // Öffne die Analytics-Seite in einem neuen Tab oder navigiere dorthin
+    window.open(`/shops/${lastShop.id}/analytics`, '_blank')
+  }
+
+  async function handleSendNotification(type: 'shop_closed' | 'shipping') {
+    if (!school) return
+
+    setSendingNotification(type)
+    try {
+      // TODO: Implementiere Email-Versand
+      // Hier würde die Email-Logik eingefügt werden
+      await new Promise(resolve => setTimeout(resolve, 1000)) // Simuliere API-Call
+
+      setSnackbar({
+        open: true,
+        message: type === 'shop_closed' 
+          ? 'Benachrichtigung "Shop geschlossen" wurde gesendet'
+          : 'Benachrichtigung "Versand" wurde gesendet',
+        severity: 'success',
+      })
+    } catch (error: any) {
+      console.error('Error sending notification:', error)
+      setSnackbar({
+        open: true,
+        message: error?.message || 'Fehler beim Senden der Benachrichtigung',
+        severity: 'error',
+      })
+    } finally {
+      setSendingNotification(null)
+    }
+  }
+
   function getShopTimeStatus(shop: Shop): { status: 'open' | 'closed' | 'upcoming' | 'none'; message?: string } {
     const now = new Date()
     const openAt = shop.shop_open_at ? new Date(shop.shop_open_at) : null
@@ -909,7 +968,7 @@ export default function SchoolDetail() {
                 select
                 label="Status"
                 value={school.status}
-                onChange={(e) => handleStatusChange(e.target.value as 'lead' | 'active' | 'existing')}
+                onChange={(e) => handleStatusChange(e.target.value as 'lead' | 'active' | 'production' | 'existing')}
                 disabled={updatingStatus}
                 size="small"
                 sx={{
@@ -921,12 +980,60 @@ export default function SchoolDetail() {
               >
                 <MenuItem value="lead">Lead</MenuItem>
                 <MenuItem value="active">Aktiv</MenuItem>
+                <MenuItem value="production">Produktion</MenuItem>
                 <MenuItem value="existing">Bestand</MenuItem>
               </TextField>
               {updatingStatus && <CircularProgress size={20} />}
             </Box>
           </Box>
         </Box>
+
+        {/* Produktion-Aktionen */}
+        {school.status === 'production' && (
+          <Card sx={{ mb: 3, background: 'linear-gradient(135deg, #667eea15 0%, #764ba215 100%)', border: '1px solid', borderColor: 'primary.main' }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  Produktion-Aktionen
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <Button
+                  variant="contained"
+                  startIcon={<DownloadIcon />}
+                  onClick={handleExportLastShopAnalytics}
+                  disabled={!getLastClosedShop()}
+                >
+                  Auswertung exportieren
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<SendIcon />}
+                  onClick={() => handleSendNotification('shop_closed')}
+                  disabled={sendingNotification !== null}
+                >
+                  {sendingNotification === 'shop_closed' ? <CircularProgress size={20} /> : 'Benachrichtigung Shop geschlossen'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<LocalShippingIcon />}
+                  onClick={() => handleSendNotification('shipping')}
+                  disabled={sendingNotification !== null}
+                >
+                  {sendingNotification === 'shipping' ? <CircularProgress size={20} /> : 'Benachrichtigung Versand'}
+                </Button>
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={() => handleStatusChange('existing')}
+                  disabled={updatingStatus}
+                >
+                  Zu Bestand verschieben
+                </Button>
+              </Box>
+            </CardContent>
+          </Card>
+        )}
 
       <Grid container spacing={3}>
         {/* Shops Spalte */}

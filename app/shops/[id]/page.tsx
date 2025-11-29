@@ -40,6 +40,8 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import InfoIcon from '@mui/icons-material/Info'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import BarChartIcon from '@mui/icons-material/BarChart'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import Snackbar from '@mui/material/Snackbar'
 
 type Shop = Database['public']['Tables']['shops']['Row']
@@ -78,6 +80,9 @@ export default function ShopDetail() {
     shop_open_at: '',
     shop_close_at: '',
   })
+  const [editingSlug, setEditingSlug] = useState(false)
+  const [slugValue, setSlugValue] = useState('')
+  const [savingSlug, setSavingSlug] = useState(false)
 
   useEffect(() => {
     if (params.id) {
@@ -136,6 +141,7 @@ export default function ShopDetail() {
       // Stelle sicher, dass die Daten korrekt gesetzt sind
       if (data) {
         setShop(data)
+        setSlugValue(data.slug)
         // Aktualisiere Schulstatus wenn Shop aktiv ist
         if (data.status === 'live') {
           await updateSchoolStatusIfNeeded(true)
@@ -143,6 +149,68 @@ export default function ShopDetail() {
       }
     } catch (error) {
       console.error('Error loading shop:', error)
+    }
+  }
+
+  async function handleSaveSlug() {
+    if (!shop || !slugValue.trim()) {
+      setSnackbar({
+        open: true,
+        message: 'Slug darf nicht leer sein',
+        severity: 'error',
+      })
+      return
+    }
+
+    // Validiere Slug-Format (nur Kleinbuchstaben, Zahlen, Bindestriche)
+    const slugRegex = /^[a-z0-9-]+$/
+    if (!slugRegex.test(slugValue.toLowerCase())) {
+      setSnackbar({
+        open: true,
+        message: 'Slug darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten',
+        severity: 'error',
+      })
+      return
+    }
+
+    setSavingSlug(true)
+    try {
+      const { error } = await supabase
+        .from('shops')
+        .update({ slug: slugValue.toLowerCase().trim() })
+        .eq('id', shop.id)
+
+      if (error) {
+        // Prüfe ob es ein Unique-Constraint-Fehler ist
+        if (error.code === '23505') {
+          setSnackbar({
+            open: true,
+            message: 'Dieser Slug wird bereits verwendet',
+            severity: 'error',
+          })
+        } else {
+          throw error
+        }
+        return
+      }
+
+      // Aktualisiere lokalen State
+      setShop({ ...shop, slug: slugValue.toLowerCase().trim() })
+      setEditingSlug(false)
+      setSnackbar({
+        open: true,
+        message: 'Slug erfolgreich aktualisiert',
+        severity: 'success',
+      })
+    } catch (error: any) {
+      console.error('Error updating slug:', error)
+      setSnackbar({
+        open: true,
+        message: error?.message || 'Fehler beim Aktualisieren des Slugs',
+        severity: 'error',
+      })
+    } finally {
+      setSavingSlug(false)
     }
   }
 
@@ -495,6 +563,18 @@ export default function ShopDetail() {
       <Container maxWidth="xl" sx={{ py: 6 }}>
         <Box sx={{ mb: 5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <IconButton
+              onClick={() => router.push(`/schools/${shop.school_id}`)}
+              sx={{
+                background: 'white',
+                boxShadow: 1,
+                '&:hover': {
+                  background: '#f8fafc',
+                },
+              }}
+            >
+              <ArrowBackIcon />
+            </IconButton>
             <Box
               sx={{
                 width: 64,
@@ -524,19 +604,74 @@ export default function ShopDetail() {
               >
                 {shop.name}
               </Typography>
-              <Typography 
-                variant="body1" 
-                sx={{ 
-                  color: 'text.secondary',
-                  fontWeight: 500,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}
-              >
-                {shop.slug}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {editingSlug ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+                    <TextField
+                      size="small"
+                      value={slugValue}
+                      onChange={(e) => setSlugValue(e.target.value)}
+                      sx={{
+                        flexGrow: 1,
+                        '& .MuiInputBase-input': {
+                          textTransform: 'uppercase',
+                          fontWeight: 500,
+                        },
+                      }}
+                      disabled={savingSlug}
+                    />
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={handleSaveSlug}
+                      disabled={savingSlug}
+                    >
+                      {savingSlug ? <CircularProgress size={20} /> : <EditIcon />}
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setEditingSlug(false)
+                        setSlugValue(shop.slug)
+                      }}
+                      disabled={savingSlug}
+                    >
+                      <CloseIcon />
+                    </IconButton>
+                  </Box>
+                ) : (
+                  <>
+                    <Typography 
+                      variant="body1" 
+                      sx={{ 
+                        color: 'text.secondary',
+                        fontWeight: 500,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      {shop.slug}
+                    </Typography>
+                    <IconButton
+                      size="small"
+                      onClick={() => setEditingSlug(true)}
+                      sx={{ ml: 0.5 }}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </>
+                )}
+              </Box>
           </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Button
+              variant="contained"
+              startIcon={<BarChartIcon />}
+              onClick={() => router.push(`/shops/${params.id}/analytics`)}
+              sx={{ mr: 1 }}
+            >
+              Auswertung
+            </Button>
             <Chip
               label={shop.status}
               color={getStatusColor(shop.status) as any}

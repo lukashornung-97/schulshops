@@ -36,7 +36,9 @@ interface ParsedOrder {
   className: string | null
   items: Array<{
     productName: string
-    variantName: string | null
+    variantName: string | null // Original variant title
+    size: string | null // Größe (vor dem /)
+    color: string | null // Farbe (nach dem /)
     quantity: number
     unitPrice: number
     productTags?: string
@@ -353,7 +355,7 @@ export async function POST(request: NextRequest) {
         productName = productName.split('|')[0].trim()
       }
       
-      const variantName = row['Product Variant'] || row['Line items: Variant title'] || null
+      const variantTitle = row['Product Variant'] || row['Line items: Variant title'] || null
       const quantityStr = row['Quantity'] || row['Line items: Quantity'] || '1'
       const quantity = parseInt(quantityStr.toString().replace(/[^\d]/g, '')) || 1
       const unitPriceStr = row['Unit Price'] || row['Line items: Price'] || '0'
@@ -363,12 +365,36 @@ export async function POST(request: NextRequest) {
         continue
       }
 
+      // Parse Variante: Format "Größe / Farbe" (z.B. "M / Schwarz")
+      let size: string | null = null
+      let color: string | null = null
+      
+      if (variantTitle) {
+        const variantParts = variantTitle.toString().split('/').map(s => s.trim())
+        if (variantParts.length >= 2) {
+          size = variantParts[0] || null
+          color = variantParts[1] || null
+        } else if (variantParts.length === 1) {
+          // Falls kein / vorhanden, versuche zu erkennen ob es Größe oder Farbe ist
+          const singleValue = variantParts[0]
+          // Typische Größen: S, M, L, XL, XXL, etc.
+          if (/^(XS|S|M|L|XL|XXL|XXXL|\d+)$/i.test(singleValue)) {
+            size = singleValue
+          } else {
+            // Vermutlich eine Farbe
+            color = singleValue
+          }
+        }
+      }
+
       // Berechne Preis (vereinfacht, da wir Produkte nicht matchen müssen)
       const finalPrice = unitPrice > 0 ? unitPrice : 0
 
       order.items.push({
         productName: productName.trim(),
-        variantName: variantName?.trim() || null,
+        variantName: variantTitle?.trim() || null,
+        size: size,
+        color: color,
         quantity,
         unitPrice: finalPrice,
         productTags: productTags || undefined,
@@ -410,14 +436,30 @@ export async function POST(request: NextRequest) {
         const productIds = products?.map(p => p.id) || []
         const { data: variants } = await supabase
           .from('product_variants')
-          .select('id, product_id, name, additional_price')
+          .select('id, product_id, name, color_name, additional_price')
           .in('product_id', productIds)
           .eq('active', true)
 
         const variantsMap = new Map<string, NonNullable<typeof variants>[0]>()
         variants?.forEach(v => {
-          const key = `${v.product_id}-${v.name.toLowerCase().trim()}`
-          variantsMap.set(key, v)
+          // Erstelle Keys für Kombinations-Varianten (Größe + Farbe)
+          if (v.name && v.name.trim() && v.color_name && v.color_name.trim()) {
+            const comboKey = `${v.product_id}-combo-${v.name.toLowerCase().trim()} / ${v.color_name.toLowerCase().trim()}`
+            variantsMap.set(comboKey, v)
+          }
+          // Erstelle Keys für Größen-Varianten
+          if (v.name && v.name.trim() && !v.color_name) {
+            const sizeKey = `${v.product_id}-size-${v.name.toLowerCase().trim()}`
+            variantsMap.set(sizeKey, v)
+          }
+          // Erstelle Keys für Farb-Varianten
+          if (v.color_name && v.color_name.trim()) {
+            const colorKey = `${v.product_id}-color-${v.color_name.toLowerCase().trim()}`
+            variantsMap.set(colorKey, v)
+          }
+          // Fallback: Original Key für Kompatibilität
+          const originalKey = `${v.product_id}-${(v.name || '').toLowerCase().trim()}`
+          variantsMap.set(originalKey, v)
         })
 
         // Formatiere total_amount
@@ -506,12 +548,57 @@ export async function POST(request: NextRequest) {
           }
 
           let variantId = null
-          if (item.variantName) {
+          
+          // Erstelle Varianten für Größe und/oder Farbe
+          if (item.size || item.color) {
+            // Erstelle eine Kombinations-Variante die beide Informationen enthält
+            // Format: "Größe / Farbe" oder nur "Größe" oder nur "Farbe"
+            let variantDisplayName = ''
+            if (item.size && item.color) {
+              variantDisplayName = `${item.size} / ${item.color}`
+            } else if (item.size) {
+              variantDisplayName = item.size
+            } else if (item.color) {
+              variantDisplayName = item.color
+            }
+
+            // Suche nach bestehender Kombinations-Variante
+            const comboKey = `${product.id}-combo-${variantDisplayName.toLowerCase().trim()}`
+            let comboVariant = variantsMap.get(comboKey)
+            
+            if (!comboVariant) {
+              console.log(`Erstelle Kombinations-Variante: "${variantDisplayName}" für Produkt "${product.name}"`)
+              
+              const { data: newComboVariant, error: comboError } = await supabase
+                .from('product_variants')
+                .insert([{
+                  product_id: product.id,
+                  name: item.size || '', // Größe im name-Feld
+                  color_name: item.color || null, // Farbe im color_name-Feld
+                  active: true,
+                  additional_price: 0,
+                }])
+                .select()
+                .single()
+
+              if (comboError) {
+                console.error(`Fehler beim Erstellen der Kombinations-Variante "${variantDisplayName}":`, comboError)
+              } else if (newComboVariant) {
+                comboVariant = newComboVariant
+                variantsMap.set(comboKey, comboVariant)
+                console.log(`✓ Kombinations-Variante erstellt: "${variantDisplayName}" (ID: ${comboVariant.id})`)
+              }
+            }
+            
+            if (comboVariant) {
+              variantId = comboVariant.id
+            }
+          } else if (item.variantName) {
+            // Fallback: Falls keine Größe/Farbe erkannt wurde, verwende Original-Variante
             const variantName = item.variantName.trim()
             const variantKey = `${product.id}-${variantName.toLowerCase().trim()}`
             let variant = variantsMap.get(variantKey)
             
-            // Wenn Variante nicht gefunden, erstelle sie automatisch
             if (!variant) {
               console.log(`Erstelle Variante automatisch: "${variantName}" für Produkt "${product.name}"`)
               
