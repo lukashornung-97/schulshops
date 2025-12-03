@@ -55,6 +55,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import DownloadIcon from '@mui/icons-material/Download'
+import SendIcon from '@mui/icons-material/Send'
+import LocalShippingIcon from '@mui/icons-material/LocalShipping'
 import Timeline from '@mui/lab/Timeline'
 import TimelineItem from '@mui/lab/TimelineItem'
 import TimelineSeparator from '@mui/lab/TimelineSeparator'
@@ -125,6 +128,7 @@ export default function SchoolDetail() {
   })
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [sendingNotification, setSendingNotification] = useState<string | null>(null)
+  const [exportingAnalytics, setExportingAnalytics] = useState(false)
 
   useEffect(() => {
     if (params.id) {
@@ -150,17 +154,36 @@ export default function SchoolDetail() {
     }
   }
 
-  async function handleStatusChange(newStatus: 'lead' | 'active' | 'existing') {
-    if (!school || school.status === newStatus || updatingStatus) return
+  async function handleStatusChange(newStatus: 'lead' | 'active' | 'production' | 'existing') {
+    console.log('handleStatusChange called with:', newStatus, 'current status:', school?.status)
+    
+    if (!school) {
+      console.log('No school found')
+      return
+    }
+    
+    if (school.status === newStatus) {
+      console.log('Status unchanged')
+      return
+    }
+    
+    if (updatingStatus) {
+      console.log('Already updating')
+      return
+    }
 
     setUpdatingStatus(true)
     try {
+      console.log('Updating status to:', newStatus)
       const { error } = await supabase
         .from('schools')
         .update({ status: newStatus })
         .eq('id', school.id)
 
-      if (error) throw error
+      if (error) {
+        console.error('Supabase error:', error)
+        throw error
+      }
 
       // Aktualisiere lokalen State
       setSchool({ ...school, status: newStatus })
@@ -174,7 +197,7 @@ export default function SchoolDetail() {
       console.error('Error updating school status:', error)
       setSnackbar({
         open: true,
-        message: 'Fehler beim Aktualisieren des Status',
+        message: error instanceof Error ? error.message : 'Fehler beim Aktualisieren des Status',
         severity: 'error',
       })
     } finally {
@@ -216,9 +239,6 @@ export default function SchoolDetail() {
     if (!school) return
 
     try {
-      // Prüfe ob ein Shop aktiv ist
-      const hasActiveShop = shops.some((shop) => shop.status === 'live')
-
       // Prüfe aktuellen Status der Schule
       const { data: schoolData, error: fetchError } = await supabase
         .from('schools')
@@ -232,6 +252,25 @@ export default function SchoolDetail() {
       }
 
       const currentStatus = schoolData?.status
+
+      // Wenn der Status manuell auf 'production' oder 'existing' gesetzt wurde,
+      // überschreibe ihn nicht automatisch
+      if (currentStatus === 'production' || currentStatus === 'existing') {
+        console.log('School status is manually set to', currentStatus, '- not auto-updating')
+        return
+      }
+
+      // Prüfe ob ein Shop wirklich aktiv ist (Status 'live' UND nicht geschlossen)
+      const now = new Date()
+      const hasActiveShop = shops.some((shop) => {
+        if (shop.status !== 'live') return false
+        // Wenn shop_close_at gesetzt ist und in der Vergangenheit liegt, ist der Shop nicht aktiv
+        if (shop.shop_close_at) {
+          const closeDate = new Date(shop.shop_close_at)
+          if (closeDate < now) return false
+        }
+        return true
+      })
 
       // Wenn ein Shop aktiv ist, setze Schule auf 'active'
       if (hasActiveShop && currentStatus !== 'active') {
@@ -817,19 +856,50 @@ export default function SchoolDetail() {
   }
 
   function getLastClosedShop(): Shop | null {
+    const now = new Date()
+    
+    // Finde Shops die entweder:
+    // 1. Status 'closed' haben, ODER
+    // 2. Ein shop_close_at Datum haben das bereits vergangen ist
     const closedShops = shops
-      .filter((shop) => shop.status === 'closed' && shop.shop_close_at)
+      .filter((shop) => {
+        // Shop mit Status 'closed'
+        if (shop.status === 'closed' && shop.shop_close_at) {
+          return true
+        }
+        // Shop mit shop_close_at in der Vergangenheit (auch wenn Status noch 'live')
+        if (shop.shop_close_at) {
+          const closeDate = new Date(shop.shop_close_at)
+          if (closeDate < now) {
+            return true
+          }
+        }
+        return false
+      })
       .sort((a, b) => {
         const dateA = a.shop_close_at ? new Date(a.shop_close_at).getTime() : 0
         const dateB = b.shop_close_at ? new Date(b.shop_close_at).getTime() : 0
         return dateB - dateA
       })
+    
+    console.log('All shops:', shops.map(s => ({ id: s.id, name: s.name, status: s.status, shop_close_at: s.shop_close_at })))
+    console.log('Filtered closed shops:', closedShops.map(s => ({ id: s.id, name: s.name, status: s.status, shop_close_at: s.shop_close_at })))
+    
     return closedShops[0] || null
   }
 
   async function handleExportLastShopAnalytics() {
+    if (exportingAnalytics) {
+      console.log('Already exporting, skipping...')
+      return
+    }
+    
+    console.log('handleExportLastShopAnalytics called')
     const lastShop = getLastClosedShop()
+    console.log('Last closed shop:', lastShop)
+    
     if (!lastShop) {
+      console.log('No closed shop found')
       setSnackbar({
         open: true,
         message: 'Kein geschlossener Shop gefunden',
@@ -838,8 +908,706 @@ export default function SchoolDetail() {
       return
     }
 
-    // Öffne die Analytics-Seite in einem neuen Tab oder navigiere dorthin
-    window.open(`/shops/${lastShop.id}/analytics`, '_blank')
+    console.log('Starting export for shop:', lastShop.id, lastShop.name)
+    setExportingAnalytics(true)
+    
+    // Lade die Analytics-Daten und exportiere direkt
+    try {
+      // Lade Shop-Daten mit Öffnungszeiten
+      const { data: shopData } = await supabase
+        .from('shops')
+        .select('shop_open_at, shop_close_at')
+        .eq('id', lastShop.id)
+        .single()
+
+      if (!shopData) {
+        setSnackbar({
+          open: true,
+          message: 'Shop-Daten nicht gefunden',
+          severity: 'error',
+        })
+        return
+      }
+
+      // Lade alle Order Items für diesen Shop
+      let ordersQuery = supabase
+        .from('orders')
+        .select('id, customer_name, customer_email, class_name, created_at')
+        .eq('shop_id', lastShop.id)
+        .in('status', ['pending', 'paid', 'fulfilled'])
+
+      // Filtere nach Öffnungszeitraum
+      if (shopData.shop_open_at) {
+        ordersQuery = ordersQuery.gte('created_at', shopData.shop_open_at)
+      }
+      if (shopData.shop_close_at) {
+        ordersQuery = ordersQuery.lte('created_at', shopData.shop_close_at)
+      }
+
+      const { data: ordersData } = await ordersQuery
+
+      if (!ordersData || ordersData.length === 0) {
+        setSnackbar({
+          open: true,
+          message: 'Keine Bestellungen im Öffnungszeitraum gefunden',
+          severity: 'error',
+        })
+        return
+      }
+
+      const orderIds = ordersData.map(o => o.id)
+      const { data: itemsData } = await supabase
+        .from('order_items')
+        .select('*')
+        .in('order_id', orderIds)
+
+      const productIds = Array.from(new Set(itemsData?.map(item => item.product_id) || []))
+      const { data: productsData } = await supabase
+        .from('products')
+        .select('*')
+        .in('id', productIds)
+
+      const variantIds = itemsData
+        ?.map(item => item.variant_id)
+        .filter((id): id is string => id !== null) || []
+      
+      const { data: variantsData } = variantIds.length > 0
+        ? await supabase
+            .from('product_variants')
+            .select('*')
+            .in('id', variantIds)
+        : { data: null }
+
+      const productsMap = new Map(productsData?.map(p => [p.id, p]) || [])
+      const variantsMap = new Map(variantsData?.map(v => [v.id, v]) || [])
+      const ordersMap = new Map(ordersData.map(o => [o.id, o]))
+
+      // Erstelle Analytics-Daten (vereinfachte Version der Analytics-Logik)
+      const analyticsMap = new Map<string, any>()
+      
+      itemsData?.forEach((item) => {
+        const product = productsMap.get(item.product_id)
+        const variant = item.variant_id ? variantsMap.get(item.variant_id) || null : null
+        if (!product) return
+
+        const productId = product.id
+        if (!analyticsMap.has(productId)) {
+          analyticsMap.set(productId, {
+            product: product,
+            totalQuantity: 0,
+            bySize: new Map(),
+            byColor: new Map(),
+            bySizeAndColor: new Map(),
+            orders: new Set(),
+          })
+        }
+
+        const analytics = analyticsMap.get(productId)!
+        analytics.totalQuantity += item.quantity
+        analytics.orders.add(item.order_id)
+
+        // Parse Größe und Farbe
+        let size: string | null = null
+        let color: string | null = null
+
+        if (variant) {
+          if (variant.name && variant.name.trim() && variant.color_name && variant.color_name.trim()) {
+            size = variant.name
+            color = variant.color_name
+          } else if (variant.name && variant.name.includes('/')) {
+            const parts = variant.name.split('/').map(s => s.trim())
+            if (parts.length >= 2) {
+              size = parts[0] || null
+              color = parts[1] || null
+            }
+          } else if (variant.name && variant.name.trim() && !variant.color_name) {
+            size = variant.name
+          } else if (variant.color_name && variant.color_name.trim()) {
+            color = variant.color_name
+          }
+        }
+
+        if (size) {
+          analytics.bySize.set(size, (analytics.bySize.get(size) || 0) + item.quantity)
+        }
+        if (color) {
+          analytics.byColor.set(color, (analytics.byColor.get(color) || 0) + item.quantity)
+        }
+        if (size && color) {
+          if (!analytics.bySizeAndColor.has(size)) {
+            analytics.bySizeAndColor.set(size, new Map())
+          }
+          const colorMap = analytics.bySizeAndColor.get(size)!
+          colorMap.set(color, (colorMap.get(color) || 0) + item.quantity)
+        }
+      })
+
+      const analytics = Array.from(analyticsMap.values()).sort((a, b) =>
+        a.product.name.localeCompare(b.product.name)
+      )
+
+      // Erstelle Fulfillment-Daten
+      const fulfillmentItemsList: any[] = []
+      itemsData?.forEach((item) => {
+        const product = productsMap.get(item.product_id)
+        const variant = item.variant_id ? variantsMap.get(item.variant_id) || null : null
+        const order = ordersMap.get(item.order_id)
+
+        if (!product || !order) return
+
+        let size: string | null = null
+        let color: string | null = null
+
+        if (variant) {
+          if (variant.name && variant.name.trim() && variant.color_name && variant.color_name.trim()) {
+            size = variant.name
+            color = variant.color_name
+          } else if (variant.name && variant.name.includes('/')) {
+            const parts = variant.name.split('/').map(s => s.trim())
+            if (parts.length >= 2) {
+              size = parts[0] || null
+              color = parts[1] || null
+            }
+          } else if (variant.name && variant.name.trim() && !variant.color_name) {
+            size = variant.name
+          } else if (variant.color_name && variant.color_name.trim()) {
+            color = variant.color_name
+          }
+        }
+
+        for (let i = 0; i < item.quantity; i++) {
+          fulfillmentItemsList.push({
+            customer_name: order.customer_name,
+            customer_email: order.customer_email || null,
+            class_name: order.class_name || null,
+            product_name: product.name,
+            size: size,
+            color: color,
+            quantity: 1,
+            order_id: item.order_id,
+          })
+        }
+      })
+
+      fulfillmentItemsList.sort((a, b) => {
+        const nameCompare = a.customer_name.localeCompare(b.customer_name)
+        if (nameCompare !== 0) return nameCompare
+        const classA = a.class_name || ''
+        const classB = b.class_name || ''
+        return classA.localeCompare(classB)
+      })
+
+      // Importiere ExcelJS dynamisch
+      const ExcelJS = (await import('exceljs')).default
+
+      // Erstelle Workbook
+      const workbook = new ExcelJS.Workbook()
+      const worksheet = workbook.addWorksheet('Auswertung')
+
+      // Style-Definitionen (vereinfacht)
+      const titleStyle = {
+        font: { bold: true, size: 16, color: { argb: 'FF667EEA' } },
+        alignment: { horizontal: 'left' as const, vertical: 'middle' as const },
+      }
+
+      const productHeaderStyle = {
+        font: { bold: true, size: 13, color: { argb: 'FF333333' } },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: 'FFF0F0F0' },
+        },
+        border: {
+          top: { style: 'medium' as const },
+          bottom: { style: 'thin' as const },
+          left: { style: 'thin' as const },
+          right: { style: 'thin' as const },
+        },
+      }
+
+      const tableHeaderStyle = {
+        font: { bold: true, size: 11, color: { argb: 'FFFFFFFF' } },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: 'FF764BA2' },
+        },
+        alignment: { horizontal: 'center' as const, vertical: 'middle' as const },
+        border: {
+          top: { style: 'thin' as const },
+          bottom: { style: 'thin' as const },
+          left: { style: 'thin' as const },
+          right: { style: 'thin' as const },
+        },
+      }
+
+      const totalRowStyle = {
+        font: { bold: true, size: 11 },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: 'FFE8E8E8' },
+        },
+        border: {
+          top: { style: 'medium' as const },
+          bottom: { style: 'thin' as const },
+          left: { style: 'thin' as const },
+          right: { style: 'thin' as const },
+        },
+      }
+
+      const cellStyle = {
+        border: {
+          top: { style: 'thin' as const },
+          bottom: { style: 'thin' as const },
+          left: { style: 'thin' as const },
+          right: { style: 'thin' as const },
+        },
+        alignment: { horizontal: 'center' as const, vertical: 'middle' as const },
+      }
+
+      let currentRow = 1
+
+      // Header
+      const titleRow = worksheet.addRow(['Shop Auswertungsübersicht'])
+      titleRow.height = 25
+      titleRow.getCell(1).style = titleStyle
+      worksheet.mergeCells(currentRow, 1, currentRow, 5)
+      currentRow++
+
+      const dateRow = worksheet.addRow([`Erstellt am: ${new Date().toLocaleString('de-DE')}`])
+      dateRow.getCell(1).style = {
+        font: { italic: true, size: 10, color: { argb: 'FF666666' } },
+      }
+      worksheet.mergeCells(currentRow, 1, currentRow, 5)
+      currentRow++
+
+      worksheet.addRow([])
+      currentRow++
+
+      // Helper-Funktionen für Sortierung
+      function sortSizes(sizes: string[]): string[] {
+        const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL']
+        return sizes.sort((a, b) => {
+          const aIndex = sizeOrder.findIndex(s => s.toUpperCase() === a.toUpperCase())
+          const bIndex = sizeOrder.findIndex(s => s.toUpperCase() === b.toUpperCase())
+          if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex
+          if (aIndex !== -1) return -1
+          if (bIndex !== -1) return 1
+          const aNum = parseInt(a)
+          const bNum = parseInt(b)
+          if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum
+          return a.localeCompare(b)
+        })
+      }
+
+      function getAllSizes(analytics: any): string[] {
+        const sizes = new Set<string>()
+        analytics.bySize.forEach((_: any, size: string) => sizes.add(size))
+        analytics.bySizeAndColor.forEach((_: any, size: string) => sizes.add(size))
+        return sortSizes(Array.from(sizes))
+      }
+
+      function getAllColors(analytics: any): string[] {
+        const colors = new Set<string>()
+        analytics.byColor.forEach((_: any, color: string) => colors.add(color))
+        analytics.bySizeAndColor.forEach((colorMap: Map<string, number>) => {
+          colorMap.forEach((_: any, color: string) => colors.add(color))
+        })
+        return Array.from(colors).sort()
+      }
+
+      // Produkte
+      analytics.forEach((productAnalytics: any, productIndex: number) => {
+        const productNameRow = worksheet.addRow([`Produkt: ${productAnalytics.product.name}`])
+        productNameRow.height = 22
+        productNameRow.getCell(1).style = productHeaderStyle
+        worksheet.mergeCells(currentRow, 1, currentRow, 5)
+        currentRow++
+
+        const infoRow = worksheet.addRow([
+          `Gesamtmenge: ${productAnalytics.totalQuantity} Stück`,
+        ])
+        infoRow.getCell(1).style = {
+          font: { size: 10, color: { argb: 'FF666666' } },
+        }
+        worksheet.mergeCells(currentRow, 1, currentRow, 5)
+        currentRow++
+
+        worksheet.addRow([])
+        currentRow++
+
+        const sizes = getAllSizes(productAnalytics)
+        const colors = getAllColors(productAnalytics)
+        const hasSizeAndColor = sizes.length > 0 && colors.length > 0
+
+        if (hasSizeAndColor) {
+          const headerRow = worksheet.addRow(['Größe', ...colors, 'Gesamt'])
+          headerRow.height = 20
+          headerRow.eachCell((cell) => {
+            cell.style = tableHeaderStyle
+          })
+          currentRow++
+
+          sizes.forEach((size) => {
+            const colorMap = productAnalytics.bySizeAndColor.get(size) || new Map()
+            const sizeTotal = productAnalytics.bySize.get(size) || 0
+            const rowData = [size]
+
+            colors.forEach((color) => {
+              const quantity = colorMap.get(color) || 0
+              rowData.push(quantity > 0 ? quantity : '')
+            })
+
+            rowData.push(sizeTotal)
+            const dataRow = worksheet.addRow(rowData)
+            dataRow.height = 18
+            dataRow.eachCell((cell, colNumber) => {
+              cell.style = cellStyle
+              if (colNumber === 1) {
+                cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+              } else if (typeof cell.value === 'number') {
+                cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+              }
+            })
+            currentRow++
+          })
+
+          const totalRowData = ['Gesamt']
+          colors.forEach((color) => {
+            const colorTotal = productAnalytics.byColor.get(color) || 0
+            totalRowData.push(colorTotal > 0 ? colorTotal : '')
+          })
+          totalRowData.push(productAnalytics.totalQuantity)
+
+          const totalRow = worksheet.addRow(totalRowData)
+          totalRow.height = 20
+          totalRow.eachCell((cell, colNumber) => {
+            cell.style = totalRowStyle
+            if (colNumber === 1) {
+              cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+            } else if (typeof cell.value === 'number') {
+              cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+            }
+          })
+          currentRow++
+        } else if (sizes.length > 0) {
+          const headerRow = worksheet.addRow(['Größe', 'Menge'])
+          headerRow.height = 20
+          headerRow.eachCell((cell) => {
+            cell.style = tableHeaderStyle
+          })
+          currentRow++
+
+          sizes.forEach((size) => {
+            const dataRow = worksheet.addRow([size, productAnalytics.bySize.get(size) || 0])
+            dataRow.height = 18
+            dataRow.eachCell((cell, colNumber) => {
+              cell.style = cellStyle
+              if (colNumber === 1) {
+                cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+              } else {
+                cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+              }
+            })
+            currentRow++
+          })
+
+          const totalRow = worksheet.addRow(['Gesamt', productAnalytics.totalQuantity])
+          totalRow.height = 20
+          totalRow.eachCell((cell, colNumber) => {
+            cell.style = totalRowStyle
+            if (colNumber === 1) {
+              cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+            } else {
+              cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+            }
+          })
+          currentRow++
+        } else if (colors.length > 0) {
+          const headerRow = worksheet.addRow(['Farbe', 'Menge'])
+          headerRow.height = 20
+          headerRow.eachCell((cell) => {
+            cell.style = tableHeaderStyle
+          })
+          currentRow++
+
+          colors.forEach((color) => {
+            const dataRow = worksheet.addRow([color, productAnalytics.byColor.get(color) || 0])
+            dataRow.height = 18
+            dataRow.eachCell((cell, colNumber) => {
+              cell.style = cellStyle
+              if (colNumber === 1) {
+                cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+              } else {
+                cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+              }
+            })
+            currentRow++
+          })
+
+          const totalRow = worksheet.addRow(['Gesamt', productAnalytics.totalQuantity])
+          totalRow.height = 20
+          totalRow.eachCell((cell, colNumber) => {
+            cell.style = totalRowStyle
+            if (colNumber === 1) {
+              cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+            } else {
+              cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+            }
+          })
+          currentRow++
+        } else {
+          const infoRow = worksheet.addRow(['Keine Varianten-Informationen verfügbar'])
+          infoRow.getCell(1).style = {
+            font: { italic: true, size: 10, color: { argb: 'FF999999' } },
+            alignment: { horizontal: 'left', vertical: 'middle' },
+          }
+          worksheet.mergeCells(currentRow, 1, currentRow, 5)
+          currentRow++
+        }
+
+        if (productIndex < analytics.length - 1) {
+          worksheet.addRow([])
+          currentRow++
+          worksheet.addRow([])
+          currentRow++
+        }
+      })
+
+      worksheet.columns.forEach((column, index) => {
+        if (index === 0) {
+          column.width = 20
+        } else {
+          column.width = 12
+        }
+      })
+
+      // Fulfillment Worksheet
+      const fulfillmentWorksheet = workbook.addWorksheet('Fulfillment')
+      let fulfillmentRow = 1
+
+      const fulfillmentTitleRow = fulfillmentWorksheet.addRow(['Fulfillment - Zuordnung Person zu Produkten'])
+      fulfillmentTitleRow.height = 25
+      fulfillmentTitleRow.getCell(1).style = titleStyle
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      const fulfillmentDateRow = fulfillmentWorksheet.addRow([`Erstellt am: ${new Date().toLocaleString('de-DE')}`])
+      fulfillmentDateRow.getCell(1).style = {
+        font: { italic: true, size: 10, color: { argb: 'FF666666' } },
+      }
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      fulfillmentWorksheet.addRow([])
+      fulfillmentRow++
+
+      const fulfillmentHeaderRow = fulfillmentWorksheet.addRow([
+        'Name',
+        'Klasse',
+        'Produkt',
+        'Größe',
+        'Farbe',
+      ])
+      fulfillmentHeaderRow.height = 20
+      fulfillmentHeaderRow.eachCell((cell) => {
+        cell.style = tableHeaderStyle
+      })
+      fulfillmentRow++
+
+      const groupedByCustomer = new Map<string, any[]>()
+      fulfillmentItemsList.forEach((item) => {
+        const key = `${item.customer_name}|${item.class_name || ''}`
+        if (!groupedByCustomer.has(key)) {
+          groupedByCustomer.set(key, [])
+        }
+        groupedByCustomer.get(key)!.push(item)
+      })
+
+      groupedByCustomer.forEach((items) => {
+        const firstItem = items[0]
+        const customerName = firstItem.customer_name
+        const className = firstItem.class_name || ''
+
+        const personHeaderRow = fulfillmentWorksheet.addRow([
+          customerName,
+          className,
+          '',
+          '',
+          '',
+        ])
+        personHeaderRow.height = 22
+        personHeaderRow.eachCell((cell, colNumber) => {
+          if (colNumber <= 2) {
+            cell.style = productHeaderStyle
+          } else {
+            cell.style = {
+              fill: {
+                type: 'pattern' as const,
+                pattern: 'solid' as const,
+                fgColor: { argb: 'FFF0F0F0' },
+              },
+              border: {
+                top: { style: 'thin' as const },
+                bottom: { style: 'thin' as const },
+                left: { style: 'thin' as const },
+                right: { style: 'thin' as const },
+              },
+            }
+          }
+        })
+        fulfillmentRow++
+
+        items.forEach((item) => {
+          const productRow = fulfillmentWorksheet.addRow([
+            '',
+            '',
+            item.product_name,
+            item.size || '-',
+            item.color || '-',
+          ])
+          productRow.height = 18
+          productRow.eachCell((cell, colNumber) => {
+            cell.style = cellStyle
+            if (colNumber <= 2) {
+              cell.style.fill = {
+                type: 'pattern' as const,
+                pattern: 'solid' as const,
+                fgColor: { argb: 'FFF9F9F9' },
+              }
+            } else if (colNumber === 3) {
+              cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+            } else {
+              cell.style.alignment = { horizontal: 'center', vertical: 'middle' }
+            }
+          })
+          fulfillmentRow++
+        })
+
+        fulfillmentWorksheet.addRow([])
+        fulfillmentRow++
+      })
+
+      fulfillmentWorksheet.columns = [
+        { width: 25 },
+        { width: 12 },
+        { width: 25 },
+        { width: 10 },
+        { width: 15 },
+      ]
+
+      // Validierung
+      const totalFromAnalytics = analytics.reduce((sum: number, productAnalytics: any) => sum + productAnalytics.totalQuantity, 0)
+      const totalFromFulfillment = fulfillmentItemsList.length
+
+      fulfillmentRow++
+      fulfillmentWorksheet.addRow([])
+      fulfillmentRow++
+
+      const validationRow = fulfillmentWorksheet.addRow([
+        'VALIDIERUNG',
+        '',
+        '',
+        '',
+        '',
+      ])
+      validationRow.height = 20
+      validationRow.getCell(1).style = {
+        font: { bold: true, size: 11, color: { argb: 'FFFFFFFF' } },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: totalFromAnalytics === totalFromFulfillment ? 'FF10B981' : 'FFEF4444' },
+        },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+        border: {
+          top: { style: 'medium' as const },
+          bottom: { style: 'thin' as const },
+          left: { style: 'thin' as const },
+          right: { style: 'thin' as const },
+        },
+      }
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      const validationDetailsRow = fulfillmentWorksheet.addRow([
+        `Gesamtmenge Blatt 1 (Auswertung): ${totalFromAnalytics} Stück`,
+        '',
+        '',
+        '',
+        '',
+      ])
+      validationDetailsRow.getCell(1).style = {
+        font: { size: 10 },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+      }
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      const validationDetailsRow2 = fulfillmentWorksheet.addRow([
+        `Gesamtmenge Blatt 2 (Fulfillment): ${totalFromFulfillment} Stück`,
+        '',
+        '',
+        '',
+        '',
+      ])
+      validationDetailsRow2.getCell(1).style = {
+        font: { size: 10 },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+      }
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      const validationStatusRow = fulfillmentWorksheet.addRow([
+        totalFromAnalytics === totalFromFulfillment
+          ? `✓ Übereinstimmung: Beide Blätter enthalten ${totalFromAnalytics} Artikel`
+          : `⚠ FEHLER: Differenz von ${Math.abs(totalFromAnalytics - totalFromFulfillment)} Artikel!`,
+        '',
+        '',
+        '',
+        '',
+      ])
+      validationStatusRow.getCell(1).style = {
+        font: { 
+          bold: true, 
+          size: 11, 
+          color: { argb: totalFromAnalytics === totalFromFulfillment ? 'FF10B981' : 'FFEF4444' } 
+        },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+      }
+      fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
+      fulfillmentRow++
+
+      // Exportiere Datei
+      const fileName = `shop-auswertung-${lastShop.id}-${new Date().toISOString().split('T')[0]}.xlsx`
+      
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      link.click()
+      window.URL.revokeObjectURL(url)
+
+      setSnackbar({
+        open: true,
+        message: 'Auswertung erfolgreich exportiert',
+        severity: 'success',
+      })
+    } catch (error: any) {
+      console.error('Error exporting analytics:', error)
+      setSnackbar({
+        open: true,
+        message: error?.message || 'Fehler beim Exportieren der Auswertung',
+        severity: 'error',
+      })
+    } finally {
+      setExportingAnalytics(false)
+    }
   }
 
   async function handleSendNotification(type: 'shop_closed' | 'shipping') {
@@ -1000,11 +1768,11 @@ export default function SchoolDetail() {
               <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                 <Button
                   variant="contained"
-                  startIcon={<DownloadIcon />}
+                  startIcon={exportingAnalytics ? <CircularProgress size={20} /> : <DownloadIcon />}
                   onClick={handleExportLastShopAnalytics}
-                  disabled={!getLastClosedShop()}
+                  disabled={exportingAnalytics}
                 >
-                  Auswertung exportieren
+                  {exportingAnalytics ? 'Exportiere...' : 'Auswertung exportieren'}
                 </Button>
                 <Button
                   variant="outlined"
@@ -1012,7 +1780,7 @@ export default function SchoolDetail() {
                   onClick={() => handleSendNotification('shop_closed')}
                   disabled={sendingNotification !== null}
                 >
-                  {sendingNotification === 'shop_closed' ? <CircularProgress size={20} /> : 'Benachrichtigung Shop geschlossen'}
+                  {sendingNotification === 'shop_closed' ? <CircularProgress size={20} /> : 'Benachrichtigung Produktion'}
                 </Button>
                 <Button
                   variant="outlined"

@@ -43,3 +43,7 @@ create trigger trigger_update_school_status_on_shop_close
 -- Kommentar
 comment on function update_school_status_on_shop_close() is 'Setzt automatisch den Status einer Schule auf "production", wenn der letzte Shop geschlossen wird';
 
+
+
+
+

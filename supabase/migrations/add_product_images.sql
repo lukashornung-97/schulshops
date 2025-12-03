@@ -21,3 +21,7 @@ COMMENT ON COLUMN public.products.print_file_front_url IS 'URL to print file (fr
 COMMENT ON COLUMN public.products.print_file_back_url IS 'URL to print file (back) for production';
 COMMENT ON COLUMN public.products.print_file_side_url IS 'URL to print file (side) for production';
 
+
+
+
+

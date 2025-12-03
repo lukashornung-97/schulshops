@@ -560,7 +560,7 @@ export default function ShopAnalyticsPage() {
       currentRow++
 
       const infoRow = worksheet.addRow([
-        `Gesamtmenge: ${productAnalytics.totalQuantity} Stück | Anzahl Bestellungen: ${productAnalytics.orders.size}`,
+        `Gesamtmenge: ${productAnalytics.totalQuantity} Stück`,
       ])
       infoRow.getCell(1).style = {
         font: { size: 10, color: { argb: 'FF666666' } },
@@ -1076,10 +1076,6 @@ export default function ShopAnalyticsPage() {
                             label={`Gesamt: ${productAnalytics.totalQuantity} Stück`}
                             color="primary"
                             sx={{ fontWeight: 600 }}
-                          />
-                          <Chip
-                            label={`${productAnalytics.orders.size} Bestellung(en)`}
-                            variant="outlined"
                           />
                           <Typography variant="body2" color="text.secondary">
                             {productAnalytics.product.base_price.toFixed(2)} € Grundpreis
