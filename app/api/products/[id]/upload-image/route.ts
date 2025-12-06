@@ -1,5 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabase'
+
+/**
+ * Extrahiert Bucket-Namen und Dateipfad aus einer Supabase Storage URL
+ * Format: https://[project].supabase.co/storage/v1/object/public/[bucket]/[path]
+ * oder: https://[project].supabase.co/storage/v1/object/sign/[bucket]/[path]?...
+ */
+function parseStorageUrl(url: string): { bucket: string; path: string } | null {
+  try {
+    const urlObj = new URL(url)
+    
+    // Suche nach dem Bucket-Namen im Pfad
+    // Format: /storage/v1/object/public/[bucket]/[path]
+    // oder: /storage/v1/object/sign/[bucket]/[path]
+    const pathMatch = urlObj.pathname.match(/\/storage\/v1\/object\/(public|sign)\/([^\/]+)\/(.+)/)
+    
+    if (pathMatch) {
+      const bucket = pathMatch[2]
+      const path = pathMatch[3]
+      return { bucket, path }
+    }
+    
+    // Fallback: Suche nach Bucket-Namen direkt im Pfad
+    const parts = urlObj.pathname.split('/')
+    const bucketIndex = parts.findIndex(part => part === 'product-images' || part === 'print-files')
+    if (bucketIndex >= 0 && bucketIndex < parts.length - 1) {
+      const bucket = parts[bucketIndex]
+      const path = parts.slice(bucketIndex + 1).join('/')
+      return { bucket, path }
+    }
+    
+    return null
+  } catch (error) {
+    console.error('Error parsing storage URL:', error, url)
+    return null
+  }
+}
 
 /**
  * API Route zum Hochladen von Produktbildern
@@ -21,6 +57,7 @@ export async function POST(
     const file = formData.get('file') as File
     const type = formData.get('type') as string
     const isPrintFile = formData.get('is_print_file') === 'true'
+    const customFileNameRaw = (formData.get('custom_file_name') as string | null)?.trim()
 
     if (!file) {
       return NextResponse.json(
@@ -36,6 +73,13 @@ export async function POST(
       )
     }
 
+    if (isPrintFile && (!customFileNameRaw || customFileNameRaw.length === 0)) {
+      return NextResponse.json(
+        { error: 'Für Druckdateien muss ein Dateiname angegeben werden.' },
+        { status: 400 }
+      )
+    }
+
     const validTypes = ['front', 'back', 'side']
     if (!validTypes.includes(type)) {
       return NextResponse.json(
@@ -45,9 +89,9 @@ export async function POST(
     }
 
     // Prüfe ob Produkt existiert
-    const { data: product, error: productError } = await supabase
+    const { data: product, error: productError } = await supabaseAdmin
       .from('products')
-      .select('id, shop_id')
+      .select('id, name, shop_id')
       .eq('id', params.id)
       .single()
 
@@ -58,9 +102,45 @@ export async function POST(
       )
     }
 
-    // Erstelle eindeutigen Dateinamen (ohne Textilfarbe, wird später zugeordnet)
-    const fileExt = file.name.split('.').pop()
-    const fileName = `${params.id}/unassigned/${type}_${Date.now()}.${fileExt}`
+    // Lade Shop-Daten für Dateinamen
+    let shopIdentifier = 'shop'
+    if (product.shop_id) {
+      const { data: shop } = await supabaseAdmin
+        .from('shops')
+        .select('name, slug')
+        .eq('id', product.shop_id)
+        .single()
+      
+      if (shop) {
+        shopIdentifier = (shop.slug || shop.name || 'shop')
+      }
+    }
+
+    const normalizeForFile = (value: string | null | undefined, fallback = 'x') =>
+      (value || fallback)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '') || fallback
+
+    const shopName = normalizeForFile(shopIdentifier)
+    const productName = normalizeForFile(product.name, 'produkt')
+    const typeLabel = type === 'front' ? 'front' : type === 'back' ? 'back' : 'side'
+
+    const fileExt = file.name.split('.').pop() || 'dat'
+    
+    // Für Druckdateien verwende den benutzerdefinierten Dateinamen, für Bilder den Standard-Namen mit Timestamp
+    let baseFileName: string
+    if (isPrintFile) {
+      baseFileName = normalizeForFile(customFileNameRaw, 'file')
+    } else {
+      // Füge Timestamp hinzu, um eindeutige Dateinamen zu gewährleisten
+      // (da die Textilfarbe erst später zugeordnet wird)
+      const timestamp = Date.now()
+      baseFileName = `${shopName}_${productName}_${typeLabel}_${timestamp}`
+    }
+    
+    const storagePath = `${params.id}/${isPrintFile ? 'print' : 'images'}/${baseFileName}.${fileExt}`
     
     // Bestimme Storage Bucket basierend auf Typ
     const bucket = isPrintFile ? 'print-files' : 'product-images'
@@ -70,15 +150,28 @@ export async function POST(
     const buffer = Buffer.from(arrayBuffer)
 
     // Upload zu Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from(bucket)
-      .upload(fileName, buffer, {
+      .upload(storagePath, buffer, {
         contentType: file.type,
         upsert: false,
       })
 
     if (uploadError) {
       console.error('Upload error:', uploadError)
+      
+      // Spezielle Fehlermeldung für fehlenden Bucket
+      if (uploadError.message.includes('Bucket not found') || uploadError.message.includes('not found')) {
+        return NextResponse.json(
+          { 
+            error: `Storage Bucket "${bucket}" nicht gefunden. Bitte führe die Migration "create_storage_buckets.sql" in Supabase aus, um die benötigten Buckets zu erstellen.`,
+            bucket: bucket,
+            hint: 'Die SQL-Datei befindet sich in: supabase/migrations/create_storage_buckets.sql'
+          },
+          { status: 500 }
+        )
+      }
+      
       return NextResponse.json(
         { error: `Fehler beim Hochladen: ${uploadError.message}` },
         { status: 500 }
@@ -86,9 +179,9 @@ export async function POST(
     }
 
     // Hole öffentliche URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseAdmin.storage
       .from(bucket)
-      .getPublicUrl(fileName)
+      .getPublicUrl(storagePath)
 
     const publicUrl = urlData.publicUrl
 
@@ -106,7 +199,7 @@ export async function POST(
     }
 
     // Erstelle neuen Eintrag ohne Textilfarbe
-    const { data: newImage, error: insertError } = await supabase
+    const { data: newImage, error: insertError } = await supabaseAdmin
       .from('product_images')
       .insert([imageData])
       .select()
@@ -115,7 +208,7 @@ export async function POST(
     if (insertError) {
       console.error('Insert error:', insertError)
       // Lösche hochgeladene Datei bei Fehler
-      await supabase.storage.from(bucket).remove([fileName])
+      await supabaseAdmin.storage.from(bucket).remove([storagePath])
       return NextResponse.json(
         { error: `Fehler beim Speichern: ${insertError.message}` },
         { status: 500 }
@@ -166,7 +259,7 @@ export async function DELETE(
     }
 
     // Lade Bild-Eintrag
-    const { data: imageEntry, error: imageError } = await supabase
+    const { data: imageEntry, error: imageError } = await supabaseAdmin
       .from('product_images')
       .select('*')
       .eq('product_id', params.id)
@@ -191,20 +284,22 @@ export async function DELETE(
     }
 
     for (const url of urlsToDelete) {
-      const urlParts = url.split('/')
-      const bucketIndex = urlParts.findIndex(part => part === 'product-images' || part === 'print-files')
-      if (bucketIndex >= 0) {
-        const bucket = urlParts[bucketIndex]
-        const fileName = urlParts.slice(bucketIndex + 1).join('/')
-        
-        await supabase.storage
-          .from(bucket)
-          .remove([fileName])
+      const parsed = parseStorageUrl(url)
+      if (parsed) {
+        try {
+          await supabaseAdmin.storage
+            .from(parsed.bucket)
+            .remove([parsed.path])
+        } catch (error) {
+          console.error(`Error deleting file from ${parsed.bucket}/${parsed.path}:`, error)
+        }
+      } else {
+        console.warn('Could not parse storage URL:', url)
       }
     }
 
     // Lösche Eintrag aus Datenbank
-    const { error: deleteError } = await supabase
+    const { error: deleteError } = await supabaseAdmin
       .from('product_images')
       .delete()
       .eq('id', imageEntry.id)

@@ -8,11 +8,14 @@ CREATE TABLE IF NOT EXISTS public.product_images (
   textile_color_id uuid REFERENCES public.product_variants(id), -- Optional: Verknüpfung mit Variante
   textile_color_name text, -- Fallback: Name der Textilfarbe (z.B. "Schwarz", "Weiß")
   image_type text NOT NULL CHECK (image_type IN ('front', 'back', 'side')),
-  image_url text NOT NULL,
+  image_url text, -- Optional: URL zum Shopify Frontend Bild
   print_file_url text, -- Optional: Druckdatei für diese Kombination
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
-  UNIQUE(product_id, textile_color_name, image_type) -- Eine Kombination pro Produkt/Farbe/Typ
+  -- Mindestens eine URL muss vorhanden sein (image_url ODER print_file_url)
+  CONSTRAINT check_at_least_one_url CHECK (image_url IS NOT NULL OR print_file_url IS NOT NULL),
+  -- Eine Kombination pro Produkt/Farbe/Typ (nur wenn textile_color_name gesetzt ist)
+  UNIQUE(product_id, textile_color_name, image_type) 
 );
 
 CREATE INDEX IF NOT EXISTS idx_product_images_product_id

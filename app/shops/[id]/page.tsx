@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import {
   Container,
   Typography,
@@ -46,6 +47,43 @@ import Snackbar from '@mui/material/Snackbar'
 
 type Shop = Database['public']['Tables']['shops']['Row']
 type Product = Database['public']['Tables']['products']['Row']
+
+// Hilfsfunktion: Prüft ob ein Shop wirklich "live" ist
+// Ein Shop ist nur live, wenn status='live' UND shop_close_at nicht in der Vergangenheit liegt
+function isShopReallyLive(shop: Shop): boolean {
+  if (shop.status !== 'live') return false
+  if (shop.shop_close_at) {
+    const closeDate = new Date(shop.shop_close_at)
+    const now = new Date()
+    if (closeDate < now) return false
+  }
+  return true
+}
+
+// Funktion: Prüft und schließt Shops automatisch, deren shop_close_at in der Vergangenheit liegt
+async function checkAndCloseExpiredShops(shop: Shop | null): Promise<Shop | null> {
+  if (!shop) return null
+  
+  const now = new Date()
+  if (shop.status === 'live' && shop.shop_close_at && new Date(shop.shop_close_at) < now) {
+    // Schließe den abgelaufenen Shop
+    const { data, error } = await supabase
+      .from('shops')
+      .update({ status: 'closed' })
+      .eq('id', shop.id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error(`Error closing shop ${shop.id}:`, error)
+      return shop
+    }
+    
+    return data || shop
+  }
+  
+  return shop
+}
 
 export default function ShopDetail() {
   const params = useParams()
@@ -109,6 +147,13 @@ export default function ShopDetail() {
 
       const currentStatus = schoolData?.status
 
+      // Wenn der Status manuell auf 'production' oder 'existing' gesetzt wurde,
+      // überschreibe ihn nicht automatisch
+      if (currentStatus === 'production' || currentStatus === 'existing') {
+        console.log('School status is manually set to', currentStatus, '- not auto-updating')
+        return
+      }
+
       // Wenn ein Shop aktiv ist, setze Schule auf 'active'
       if (hasActiveShop && currentStatus !== 'active') {
         const { error: updateError } = await supabase
@@ -140,10 +185,12 @@ export default function ShopDetail() {
       
       // Stelle sicher, dass die Daten korrekt gesetzt sind
       if (data) {
-        setShop(data)
-        setSlugValue(data.slug)
-        // Aktualisiere Schulstatus wenn Shop aktiv ist
-        if (data.status === 'live') {
+        // Prüfe und schließe Shop automatisch, wenn shop_close_at in der Vergangenheit liegt
+        const updatedShop = await checkAndCloseExpiredShops(data)
+        setShop(updatedShop)
+        setSlugValue(updatedShop.slug)
+        // Aktualisiere Schulstatus wenn Shop wirklich aktiv ist
+        if (updatedShop && isShopReallyLive(updatedShop)) {
           await updateSchoolStatusIfNeeded(true)
         }
       }
@@ -664,14 +711,15 @@ export default function ShopDetail() {
               </Box>
           </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button
-              variant="contained"
-              startIcon={<BarChartIcon />}
-              onClick={() => router.push(`/shops/${params.id}/analytics`)}
-              sx={{ mr: 1 }}
-            >
-              Auswertung
-            </Button>
+            <Link href={`/shops/${params?.id}/analytics`} style={{ textDecoration: 'none' }}>
+              <Button
+                variant="contained"
+                startIcon={<BarChartIcon />}
+                sx={{ mr: 1 }}
+              >
+                Auswertung
+              </Button>
+            </Link>
             <Chip
               label={shop.status}
               color={getStatusColor(shop.status) as any}

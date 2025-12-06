@@ -13,6 +13,21 @@ import {
   MenuItem,
 } from '@mui/material'
 import { supabase } from '@/lib/supabase'
+import { Database } from '@/types/database'
+
+type Shop = Database['public']['Tables']['shops']['Row']
+
+// Hilfsfunktion: Prüft ob ein Shop wirklich "live" ist
+// Ein Shop ist nur live, wenn status='live' UND shop_close_at nicht in der Vergangenheit liegt
+function isShopReallyLive(shop: Shop): boolean {
+  if (shop.status !== 'live') return false
+  if (shop.shop_close_at) {
+    const closeDate = new Date(shop.shop_close_at)
+    const now = new Date()
+    if (closeDate < now) return false
+  }
+  return true
+}
 
 export default function NewShop() {
   const params = useParams()
@@ -65,8 +80,9 @@ export default function NewShop() {
 
       console.log('Shop created successfully:', data)
 
-      // Wenn der Shop als 'live' erstellt wurde, setze die Schule auf 'active'
-      if (shopData.status === 'live') {
+      // Wenn der Shop wirklich 'live' ist (Status 'live' UND shop_close_at nicht in der Vergangenheit),
+      // setze die Schule auf 'active'
+      if (data && data[0] && isShopReallyLive(data[0])) {
         try {
           await supabase
             .from('schools')

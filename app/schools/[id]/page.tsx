@@ -66,13 +66,49 @@ import TimelineContent from '@mui/lab/TimelineContent'
 import TimelineDot from '@mui/lab/TimelineDot'
 import TimelineOppositeContent from '@mui/lab/TimelineOppositeContent'
 import { format } from 'date-fns'
-import { de } from 'date-fns/locale/de'
+import { de } from 'date-fns/locale'
 
 type School = Database['public']['Tables']['schools']['Row']
 type Shop = Database['public']['Tables']['shops']['Row']
 type SchoolContact = Database['public']['Tables']['school_contacts']['Row']
 type SchoolNote = Database['public']['Tables']['school_notes']['Row']
 type Order = Database['public']['Tables']['orders']['Row']
+
+// Hilfsfunktion: Prüft ob ein Shop wirklich "live" ist
+// Ein Shop ist nur live, wenn status='live' UND shop_close_at nicht in der Vergangenheit liegt
+function isShopReallyLive(shop: Shop): boolean {
+  if (shop.status !== 'live') return false
+  if (shop.shop_close_at) {
+    const closeDate = new Date(shop.shop_close_at)
+    const now = new Date()
+    if (closeDate < now) return false
+  }
+  return true
+}
+
+// Funktion: Prüft und schließt Shops automatisch, deren shop_close_at in der Vergangenheit liegt
+async function checkAndCloseExpiredShops(shops: Shop[]): Promise<void> {
+  const now = new Date()
+  const shopsToClose = shops.filter(
+    (shop) => shop.status === 'live' && shop.shop_close_at && new Date(shop.shop_close_at) < now
+  )
+
+  if (shopsToClose.length > 0) {
+    // Schließe alle abgelaufenen Shops
+    await Promise.all(
+      shopsToClose.map(async (shop) => {
+        const { error } = await supabase
+          .from('shops')
+          .update({ status: 'closed' })
+          .eq('id', shop.id)
+
+        if (error) {
+          console.error(`Error closing shop ${shop.id}:`, error)
+        }
+      })
+    )
+  }
+}
 
 interface OrderWithShop extends Order {
   shop_name?: string
@@ -261,16 +297,7 @@ export default function SchoolDetail() {
       }
 
       // Prüfe ob ein Shop wirklich aktiv ist (Status 'live' UND nicht geschlossen)
-      const now = new Date()
-      const hasActiveShop = shops.some((shop) => {
-        if (shop.status !== 'live') return false
-        // Wenn shop_close_at gesetzt ist und in der Vergangenheit liegt, ist der Shop nicht aktiv
-        if (shop.shop_close_at) {
-          const closeDate = new Date(shop.shop_close_at)
-          if (closeDate < now) return false
-        }
-        return true
-      })
+      const hasActiveShop = shops.some((shop) => isShopReallyLive(shop))
 
       // Wenn ein Shop aktiv ist, setze Schule auf 'active'
       if (hasActiveShop && currentStatus !== 'active') {
@@ -308,16 +335,31 @@ export default function SchoolDetail() {
         console.log(`  shop_close_at:`, shop.shop_close_at, 'Type:', typeof shop.shop_close_at)
       })
       
-      setShops(data || [])
+      // Prüfe und schließe abgelaufene Shops automatisch
+      let finalShopsData = data || []
+      if (finalShopsData.length > 0) {
+        await checkAndCloseExpiredShops(finalShopsData)
+        // Lade Shops erneut, um die aktualisierten Status zu erhalten
+        const { data: updatedData } = await supabase
+          .from('shops')
+          .select('*')
+          .eq('school_id', params.id)
+          .order('created_at', { ascending: false })
+        if (updatedData) {
+          finalShopsData = updatedData
+        }
+      }
+      
+      setShops(finalShopsData)
       
       // Aktualisiere Schulstatus basierend auf aktiven Shops
-      if (data && data.length > 0) {
-        const hasActiveShop = data.some((shop) => shop.status === 'live')
+      if (finalShopsData.length > 0) {
+        const hasActiveShop = finalShopsData.some((shop) => isShopReallyLive(shop))
         if (hasActiveShop) {
           await updateSchoolStatusIfNeeded()
         }
         // Lade Bestellungen nachdem Shops geladen wurden
-        await loadOrders(data)
+        await loadOrders(finalShopsData)
       } else {
         setOrders([])
       }
@@ -978,6 +1020,28 @@ export default function SchoolDetail() {
             .in('id', variantIds)
         : { data: null }
 
+      // Lade Produktbilder für Druckdateien und Bilder
+      const { data: productImagesData } = await supabase
+        .from('product_images')
+        .select('product_id, textile_color_name, print_file_url, image_url, image_type')
+        .in('product_id', productIds)
+
+      // Erstelle Map: productId -> color -> print file filename
+      const printFilesMap = new Map<string, Map<string, string>>()
+      productImagesData?.forEach((img) => {
+        if (!img.product_id || !img.textile_color_name || !img.print_file_url) return
+        
+        if (!printFilesMap.has(img.product_id)) {
+          printFilesMap.set(img.product_id, new Map())
+        }
+        const colorMap = printFilesMap.get(img.product_id)!
+        
+        // Extrahiere Dateinamen aus URL
+        const urlParts = img.print_file_url.split('/')
+        const filename = urlParts[urlParts.length - 1] || ''
+        colorMap.set(img.textile_color_name, filename)
+      })
+
       const productsMap = new Map(productsData?.map(p => [p.id, p]) || [])
       const variantsMap = new Map(variantsData?.map(v => [v.id, v]) || [])
       const ordersMap = new Map(ordersData.map(o => [o.id, o]))
@@ -1242,10 +1306,42 @@ export default function SchoolDetail() {
         const hasSizeAndColor = sizes.length > 0 && colors.length > 0
 
         if (hasSizeAndColor) {
+          const colorPrintFilesMap = printFilesMap.get(productAnalytics.product.id)
           const headerRow = worksheet.addRow(['Größe', ...colors, 'Gesamt'])
           headerRow.height = 20
           headerRow.eachCell((cell) => {
             cell.style = tableHeaderStyle
+          })
+          currentRow++
+          
+          // Zweite Header-Zeile mit Druckdatei-Dateinamen
+          const printFileRowData = ['']
+          colors.forEach((color) => {
+            const printFileName = colorPrintFilesMap?.get(color) || ''
+            printFileRowData.push(printFileName)
+          })
+          printFileRowData.push('')
+          const printFileHeaderRow = worksheet.addRow(printFileRowData)
+          printFileHeaderRow.height = 18
+          printFileHeaderRow.eachCell((cell, colNumber) => {
+            cell.style = {
+              font: { bold: true, size: 9, italic: true, color: { argb: 'FFFFFFFF' } },
+              fill: {
+                type: 'pattern' as const,
+                pattern: 'solid' as const,
+                fgColor: { argb: 'FF764BA2' },
+              },
+              alignment: { horizontal: 'center' as const, vertical: 'middle' as const },
+              border: {
+                top: { style: 'thin' as const },
+                bottom: { style: 'thin' as const },
+                left: { style: 'thin' as const },
+                right: { style: 'thin' as const },
+              },
+            }
+            if (colNumber === 1) {
+              cell.value = 'Druckdatei'
+            }
           })
           currentRow++
 
@@ -1325,7 +1421,7 @@ export default function SchoolDetail() {
           })
           currentRow++
         } else if (colors.length > 0) {
-          const headerRow = worksheet.addRow(['Farbe', 'Menge'])
+          const headerRow = worksheet.addRow(['Farbe', 'Menge', 'Druckdatei'])
           headerRow.height = 20
           headerRow.eachCell((cell) => {
             cell.style = tableHeaderStyle
@@ -1333,7 +1429,11 @@ export default function SchoolDetail() {
           currentRow++
 
           colors.forEach((color) => {
-            const dataRow = worksheet.addRow([color, productAnalytics.byColor.get(color) || 0])
+            // Hole Druckdatei-Dateinamen für diese Farbe
+            const colorPrintFilesMap = printFilesMap.get(productAnalytics.product.id)
+            const printFileName = colorPrintFilesMap?.get(color) || ''
+            
+            const dataRow = worksheet.addRow([color, productAnalytics.byColor.get(color) || 0, printFileName])
             dataRow.height = 18
             dataRow.eachCell((cell, colNumber) => {
               cell.style = cellStyle
@@ -1382,6 +1482,155 @@ export default function SchoolDetail() {
           column.width = 12
         }
       })
+
+      // Auswertung nach Druckdateien (rechts im Worksheet)
+      const printFileStartColumn = 7 // Spalte G
+      let printFileRow = 1
+
+      // Sammle Daten nach Druckdateien
+      const printFileAnalytics = new Map<string, Array<{
+        productName: string
+        color: string
+        quantity: number
+      }>>()
+
+      analytics.forEach((productAnalytics: any) => {
+        const colors = getAllColors(productAnalytics)
+        const colorPrintFilesMap = printFilesMap.get(productAnalytics.product.id)
+        
+        colors.forEach((color) => {
+          const printFileName = colorPrintFilesMap?.get(color) || ''
+          if (!printFileName) return // Überspringe Farben ohne Druckdatei
+          
+          const quantity = productAnalytics.byColor.get(color) || 0
+          if (quantity === 0) return // Überspringe Farben ohne Menge
+          
+          if (!printFileAnalytics.has(printFileName)) {
+            printFileAnalytics.set(printFileName, [])
+          }
+          
+          printFileAnalytics.get(printFileName)!.push({
+            productName: productAnalytics.product.name,
+            color: color,
+            quantity: quantity
+          })
+        })
+      })
+
+      // Sortiere Druckdateien alphabetisch
+      const sortedPrintFiles = Array.from(printFileAnalytics.entries()).sort((a, b) => 
+        a[0].localeCompare(b[0])
+      )
+
+      // Header für Druckdatei-Auswertung
+      const printFileTitleRow = worksheet.getRow(printFileRow)
+      printFileTitleRow.getCell(printFileStartColumn).value = 'Auswertung nach Druckdateien'
+      printFileTitleRow.getCell(printFileStartColumn).style = titleStyle
+      worksheet.mergeCells(printFileRow, printFileStartColumn, printFileRow, printFileStartColumn + 3)
+      printFileRow++
+
+      const printFileDateRow = worksheet.getRow(printFileRow)
+      printFileDateRow.getCell(printFileStartColumn).value = `Erstellt am: ${new Date().toLocaleString('de-DE')}`
+      printFileDateRow.getCell(printFileStartColumn).style = {
+        font: { italic: true, size: 10, color: { argb: 'FF666666' } },
+      }
+      worksheet.mergeCells(printFileRow, printFileStartColumn, printFileRow, printFileStartColumn + 3)
+      printFileRow++
+
+      printFileRow++ // Leerzeile
+
+      // Header für Tabelle
+      const printFileHeaderRow = worksheet.getRow(printFileRow)
+      printFileHeaderRow.getCell(printFileStartColumn).value = 'Druckdatei'
+      printFileHeaderRow.getCell(printFileStartColumn + 1).value = 'Produkt'
+      printFileHeaderRow.getCell(printFileStartColumn + 2).value = 'Farbe'
+      printFileHeaderRow.getCell(printFileStartColumn + 3).value = 'Menge'
+      printFileHeaderRow.height = 20
+      for (let col = printFileStartColumn; col <= printFileStartColumn + 3; col++) {
+        const cell = printFileHeaderRow.getCell(col)
+        cell.style = tableHeaderStyle
+      }
+      printFileRow++
+
+      // Daten für jede Druckdatei
+      sortedPrintFiles.forEach(([printFileName, items]) => {
+        // Sortiere Items nach Produktname und dann nach Farbe
+        items.sort((a, b) => {
+          const productCompare = a.productName.localeCompare(b.productName)
+          if (productCompare !== 0) return productCompare
+          return a.color.localeCompare(b.color)
+        })
+
+        let printFileTotal = 0
+
+        items.forEach((item, index) => {
+          const dataRow = worksheet.getRow(printFileRow)
+          
+          // Druckdatei-Name nur in der ersten Zeile
+          if (index === 0) {
+            dataRow.getCell(printFileStartColumn).value = printFileName
+            dataRow.getCell(printFileStartColumn).style = {
+              ...productHeaderStyle,
+              alignment: { horizontal: 'left' as const, vertical: 'middle' as const },
+            }
+          }
+          
+          dataRow.getCell(printFileStartColumn + 1).value = item.productName
+          dataRow.getCell(printFileStartColumn + 2).value = item.color
+          dataRow.getCell(printFileStartColumn + 3).value = item.quantity
+          
+          dataRow.height = 18
+          
+          // Style für alle Zellen
+          for (let col = printFileStartColumn; col <= printFileStartColumn + 3; col++) {
+            const cell = dataRow.getCell(col)
+            if (col === printFileStartColumn && index === 0) {
+              // Bereits oben gesetzt
+            } else {
+              cell.style = cellStyle
+              if (col === printFileStartColumn + 1 || col === printFileStartColumn + 2) {
+                cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+              } else if (col === printFileStartColumn + 3) {
+                cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+              }
+            }
+          }
+          
+          printFileTotal += item.quantity
+          printFileRow++
+        })
+
+        // Gesamtzeile für diese Druckdatei
+        const totalRow = worksheet.getRow(printFileRow)
+        totalRow.getCell(printFileStartColumn).value = 'Gesamt'
+        totalRow.getCell(printFileStartColumn + 3).value = printFileTotal
+        totalRow.height = 20
+        
+        for (let col = printFileStartColumn; col <= printFileStartColumn + 3; col++) {
+          const cell = totalRow.getCell(col)
+          cell.style = totalRowStyle
+          if (col === printFileStartColumn) {
+            cell.style.alignment = { horizontal: 'left', vertical: 'middle' }
+          } else if (col === printFileStartColumn + 3) {
+            cell.style.alignment = { horizontal: 'right', vertical: 'middle' }
+          } else {
+            cell.style.fill = {
+              type: 'pattern' as const,
+              pattern: 'solid' as const,
+              fgColor: { argb: 'FFE8E8E8' },
+            }
+          }
+        }
+        
+        printFileRow++
+        printFileRow++ // Leerzeile zwischen Druckdateien
+      })
+
+      // Setze Spaltenbreiten für Druckdatei-Auswertung
+      worksheet.getColumn(printFileStartColumn).width = 30 // Druckdatei
+      worksheet.getColumn(printFileStartColumn + 1).width = 20 // Produkt
+      worksheet.getColumn(printFileStartColumn + 2).width = 15 // Farbe
+      worksheet.getColumn(printFileStartColumn + 3).width = 12 // Menge
 
       // Fulfillment Worksheet
       const fulfillmentWorksheet = workbook.addWorksheet('Fulfillment')
@@ -1579,17 +1828,118 @@ export default function SchoolDetail() {
       fulfillmentWorksheet.mergeCells(fulfillmentRow, 1, fulfillmentRow, 5)
       fulfillmentRow++
 
-      // Exportiere Datei
-      const fileName = `shop-auswertung-${lastShop.id}-${new Date().toISOString().split('T')[0]}.xlsx`
-      
-      const buffer = await workbook.xlsx.writeBuffer()
-      const blob = new Blob([buffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      // Importiere JSZip dynamisch
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      const shopSlug = lastShop?.slug || 'shop'
+
+      // Füge Excel-Datei zur ZIP hinzu
+      const excelBuffer = await workbook.xlsx.writeBuffer()
+      const excelFileName = `shop-auswertung-${lastShop.id}-${new Date().toISOString().split('T')[0]}.xlsx`
+      zip.file(excelFileName, excelBuffer)
+
+      // Sammle alle eindeutigen Druckdateien und Produktbilder
+      const zipPrintFilesSet = new Set<string>()
+      const zipImageFilesSet = new Set<string>()
+      const zipPrintFilesMap = new Map<string, { url: string; filename: string }>()
+      const zipImageFilesMap = new Map<string, { url: string; filename: string; productId: string }>()
+
+      // Normalisiere Produktnamen für Ordnerstruktur
+      const normalizeForFolder = (value: string | null | undefined, fallback = 'produkt'): string => {
+        return (value || fallback)
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '') || fallback
+      }
+
+      const productNamesMap = new Map<string, string>()
+      productsData?.forEach((product) => {
+        productNamesMap.set(product.id, normalizeForFolder(product.name))
       })
-      const url = window.URL.createObjectURL(blob)
+
+      productImagesData?.forEach((img) => {
+        if (img.print_file_url) {
+          const urlParts = img.print_file_url.split('/')
+          const filename = urlParts[urlParts.length - 1] || ''
+          const key = `${img.product_id}_${img.textile_color_name}_${img.image_type}_print`
+          if (!zipPrintFilesSet.has(key)) {
+            zipPrintFilesSet.add(key)
+            zipPrintFilesMap.set(key, { url: img.print_file_url, filename })
+          }
+        }
+        if (img.image_url) {
+          const urlParts = img.image_url.split('/')
+          const filename = urlParts[urlParts.length - 1] || ''
+          const key = `${img.product_id}_${img.textile_color_name}_${img.image_type}_image`
+          if (!zipImageFilesSet.has(key)) {
+            zipImageFilesSet.add(key)
+            zipImageFilesMap.set(key, { url: img.image_url, filename, productId: img.product_id })
+          }
+        }
+      })
+
+      // Lade Druckdateien herunter und füge sie zur ZIP hinzu
+      for (const [key, fileInfo] of zipPrintFilesMap.entries()) {
+        try {
+          // Parse Storage URL
+          const urlObj = new URL(fileInfo.url)
+          const pathMatch = urlObj.pathname.match(/\/storage\/v1\/object\/(public|sign)\/([^\/]+)\/(.+)/)
+          
+          if (pathMatch) {
+            const bucket = pathMatch[2]
+            const path = decodeURIComponent(pathMatch[3])
+            
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .download(path)
+
+            if (!error && data) {
+              const arrayBuffer = await data.arrayBuffer()
+              zip.file(`druckdateien/${fileInfo.filename}`, arrayBuffer)
+            }
+          }
+        } catch (error) {
+          console.error(`Fehler beim Herunterladen der Druckdatei ${fileInfo.filename}:`, error)
+        }
+      }
+
+      // Lade Produktbilder herunter und füge sie zur ZIP hinzu (nach Produkten sortiert)
+      for (const [key, fileInfo] of zipImageFilesMap.entries()) {
+        try {
+          // Parse Storage URL
+          const urlObj = new URL(fileInfo.url)
+          const pathMatch = urlObj.pathname.match(/\/storage\/v1\/object\/(public|sign)\/([^\/]+)\/(.+)/)
+          
+          if (pathMatch) {
+            const bucket = pathMatch[2]
+            const path = decodeURIComponent(pathMatch[3])
+            
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .download(path)
+
+            if (!error && data) {
+              const arrayBuffer = await data.arrayBuffer()
+              // Organisiere nach Produktnamen
+              const productFolderName = productNamesMap.get(fileInfo.productId) || 'unbekannt'
+              zip.file(`produktbilder/${productFolderName}/${fileInfo.filename}`, arrayBuffer)
+            }
+          }
+        } catch (error) {
+          console.error(`Fehler beim Herunterladen des Produktbildes ${fileInfo.filename}:`, error)
+        }
+      }
+
+      // Erstelle ZIP-Datei
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const dateStr = new Date().toISOString().split('T')[0]
+      const zipFileName = `shop_${shopSlug}_${dateStr}.zip`
+      
+      const url = window.URL.createObjectURL(zipBlob)
       const link = document.createElement('a')
       link.href = url
-      link.download = fileName
+      link.download = zipFileName
       link.click()
       window.URL.revokeObjectURL(url)
 

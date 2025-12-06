@@ -17,6 +17,40 @@ import StoreIcon from '@mui/icons-material/Store'
 
 type Shop = Database['public']['Tables']['shops']['Row']
 
+// Funktion: Prüft und schließt Shops automatisch, deren shop_close_at in der Vergangenheit liegt
+async function checkAndCloseExpiredShops(shops: Shop[]): Promise<Shop[]> {
+  const now = new Date()
+  const shopsToClose = shops.filter(
+    (shop) => shop.status === 'live' && shop.shop_close_at && new Date(shop.shop_close_at) < now
+  )
+
+  if (shopsToClose.length > 0) {
+    // Schließe alle abgelaufenen Shops
+    await Promise.all(
+      shopsToClose.map(async (shop) => {
+        const { error } = await supabase
+          .from('shops')
+          .update({ status: 'closed' })
+          .eq('id', shop.id)
+
+        if (error) {
+          console.error(`Error closing shop ${shop.id}:`, error)
+        }
+      })
+    )
+    
+    // Lade Shops erneut, um die aktualisierten Status zu erhalten
+    const { data: updatedShops } = await supabase
+      .from('shops')
+      .select('*')
+      .order('created_at', { ascending: false })
+    
+    return updatedShops || shops
+  }
+  
+  return shops
+}
+
 export default function ShopsPage() {
   const router = useRouter()
   const [shops, setShops] = useState<Shop[]>([])
@@ -34,7 +68,10 @@ export default function ShopsPage() {
         .order('created_at', { ascending: false })
 
       if (error) throw error
-      setShops(data || [])
+      
+      // Prüfe und schließe abgelaufene Shops automatisch
+      const updatedShops = await checkAndCloseExpiredShops(data || [])
+      setShops(updatedShops)
     } catch (error) {
       console.error('Error loading shops:', error)
     } finally {

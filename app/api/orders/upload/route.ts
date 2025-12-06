@@ -23,6 +23,7 @@ interface OrderRow {
   'Line items: Price'?: string
   'Total Amount'?: string
   'Total'?: string
+  'Total price'?: string // Neues Feld für Gesamtpreis
   'Order Date'?: string
   'Created at'?: string
   'Created at (UTC)'?: string
@@ -30,6 +31,7 @@ interface OrderRow {
 }
 
 interface ParsedOrder {
+  orderNumber: string | null // Order Number aus "Name" Feld
   shopId: string | null
   customerName: string
   customerEmail: string | null
@@ -44,6 +46,7 @@ interface ParsedOrder {
     productTags?: string
   }>
   totalAmount: number
+  totalPriceFromFile: number | null // Total price aus Excel-Datei
   orderDate: string | null
 }
 
@@ -84,16 +87,43 @@ function normalizeString(str: string | null | undefined): string {
 
 /**
  * Extrahiere alle Product Tags als Array
+ * Behandelt auch Tags mit Kommas innerhalb (z.B. "hegy, Helfenstein-Gymnasium-Geislingen")
  */
 function extractAllProductTags(productTags: string | null | undefined): string[] {
   if (!productTags) return []
-  return productTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
+  
+  // Teile nach Kommas, aber behandle auch einzelne Tags
+  const tags = productTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
+  
+  // Wenn ein Tag selbst Kommas enthält (z.B. "hegy, Helfenstein-Gymnasium-Geislingen"),
+  // versuche es weiter aufzuteilen, aber behalte auch den ganzen String
+  const expandedTags: string[] = []
+  tags.forEach(tag => {
+    expandedTags.push(tag) // Füge den ganzen Tag hinzu
+    // Wenn der Tag Leerzeichen oder Bindestriche enthält, könnte es mehrere Tags sein
+    if (tag.includes(' ') || tag.includes('-')) {
+      // Versuche auch einzelne Wörter als Tags zu behandeln
+      const words = tag.split(/[\s,-]+/).filter(w => w.length > 2) // Nur Wörter mit mehr als 2 Zeichen
+      expandedTags.push(...words)
+    }
+  })
+  
+  return Array.from(new Set(expandedTags)) // Entferne Duplikate
 }
 
 /**
- * Finde Shop anhand von Product Tags (matcht auf shop slug)
+ * Finde Shop anhand von Product Tags (matcht auf shop slug, name, school short_code)
  */
-function findShopByProductTags(shops: Array<{ id: string; slug: string; name: string }>, productTags: string | null | undefined): string | null {
+function findShopByProductTags(
+  shops: Array<{ 
+    id: string
+    slug: string
+    name: string
+    schoolShortCode?: string | null
+    schoolName?: string | null
+  }>, 
+  productTags: string | null | undefined
+): string | null {
   if (!productTags) return null
   
   const tags = extractAllProductTags(productTags)
@@ -107,12 +137,28 @@ function findShopByProductTags(shops: Array<{ id: string; slug: string; name: st
       return normalizedSlug === normalizedTag
     })
     if (shop) {
-      console.log(`✓ Exaktes Match: Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
+      console.log(`✓ Exaktes Match (Slug): Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
       return shop.id
     }
   }
   
-  // PRIORITÄT 2: Versuche Teilübereinstimmung mit slug (Tag enthält Slug oder umgekehrt)
+  // PRIORITÄT 2: Versuche Matching mit School Short Code
+  for (const tag of tags) {
+    const normalizedTag = normalizeString(tag)
+    const shop = shops.find(s => {
+      if (s.schoolShortCode) {
+        const normalizedShortCode = normalizeString(s.schoolShortCode)
+        return normalizedShortCode === normalizedTag || normalizedShortCode.includes(normalizedTag) || normalizedTag.includes(normalizedShortCode)
+      }
+      return false
+    })
+    if (shop) {
+      console.log(`✓ Match (School Short Code): Tag "${tag}" → Shop "${shop.name}" (School: ${shop.schoolShortCode})`)
+      return shop.id
+    }
+  }
+  
+  // PRIORITÄT 3: Versuche Teilübereinstimmung mit slug (Tag enthält Slug oder umgekehrt)
   for (const tag of tags) {
     const normalizedTag = normalizeString(tag)
     const shop = shops.find(s => {
@@ -123,18 +169,18 @@ function findShopByProductTags(shops: Array<{ id: string; slug: string; name: st
       }
       // Auch prüfen ob Tag Teil des Slugs ist (z.B. "weinstadt" in "shop-weinstadt-2024")
       const slugParts = normalizedSlug.split('-')
-      if (slugParts.includes(normalizedTag)) {
+      if (slugParts.some(part => normalizeString(part) === normalizedTag)) {
         return true
       }
       return false
     })
     if (shop) {
-      console.log(`✓ Teilübereinstimmung: Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
+      console.log(`✓ Teilübereinstimmung (Slug): Tag "${tag}" → Shop "${shop.name}" (Slug: ${shop.slug})`)
       return shop.id
     }
   }
   
-  // PRIORITÄT 3: Versuche auch mit Shop-Name zu matchen (falls Slug nicht passt)
+  // PRIORITÄT 4: Versuche auch mit Shop-Name zu matchen (falls Slug nicht passt)
   for (const tag of tags) {
     const normalizedTag = normalizeString(tag)
     const shop = shops.find(s => {
@@ -147,7 +193,30 @@ function findShopByProductTags(shops: Array<{ id: string; slug: string; name: st
     }
   }
   
-  console.warn(`✗ Kein Shop gefunden für Tags: ${tags.join(', ')}. Verfügbare Shops:`, shops.map(s => `${s.name} (${s.slug})`))
+  // PRIORITÄT 5: Versuche mit School Name zu matchen
+  for (const tag of tags) {
+    const normalizedTag = normalizeString(tag)
+    const shop = shops.find(s => {
+      if (s.schoolName) {
+        const normalizedSchoolName = normalizeString(s.schoolName)
+        return normalizedSchoolName.includes(normalizedTag) || normalizedTag.includes(normalizedSchoolName)
+      }
+      return false
+    })
+    if (shop) {
+      console.log(`✓ Match via School Name: Tag "${tag}" → Shop "${shop.name}" (School: ${shop.schoolName})`)
+      return shop.id
+    }
+  }
+  
+  // Debug: Zeige verfügbare Shops und Tags für besseres Troubleshooting
+  const availableSlugs = shops.map(s => s.slug).join(', ')
+  const availableNames = shops.map(s => s.name).join(', ')
+  const availableShortCodes = shops.map(s => s.schoolShortCode).filter(Boolean).join(', ')
+  console.warn(`✗ Kein Shop gefunden für Tags: "${tags.join(', ')}"`)
+  console.warn(`  Verfügbare Slugs: ${availableSlugs}`)
+  console.warn(`  Verfügbare Names: ${availableNames}`)
+  console.warn(`  Verfügbare Short Codes: ${availableShortCodes}`)
   return null
 }
 
@@ -161,9 +230,41 @@ export async function POST(request: NextRequest) {
     // Lade alle Shops
     const { data: shops, error: shopsError } = await supabase
       .from('shops')
-      .select('id, slug, name')
+      .select('id, slug, name, school_id')
     
-    console.log(`Geladene Shops:`, shops?.map(s => `${s.name} (Slug: ${s.slug})`))
+    if (shopsError) {
+      return NextResponse.json(
+        { error: 'Fehler beim Laden der Shops' },
+        { status: 500 }
+      )
+    }
+
+    if (!shops || shops.length === 0) {
+      return NextResponse.json(
+        { error: 'Keine Shops gefunden. Bitte erstellen Sie zuerst einen Shop.' },
+        { status: 400 }
+      )
+    }
+
+    // Lade alle Schulen für besseres Matching
+    const schoolIds = Array.from(new Set(shops.map(s => s.school_id).filter(Boolean)))
+    const { data: schools } = schoolIds.length > 0 ? await supabase
+      .from('schools')
+      .select('id, short_code, name')
+      .in('id', schoolIds) : { data: null }
+    
+    const schoolsMap = new Map(schools?.map(s => [s.id, s]) || [])
+    
+    // Erstelle erweiterte Shop-Liste mit School-Informationen
+    const shopsWithSchool = shops.map(s => ({
+      id: s.id,
+      slug: s.slug,
+      name: s.name,
+      schoolShortCode: schoolsMap.get(s.school_id)?.short_code || null,
+      schoolName: schoolsMap.get(s.school_id)?.name || null,
+    }))
+    
+    console.log(`Geladene Shops:`, shopsWithSchool.map(s => `${s.name} (Slug: ${s.slug}, School: ${s.schoolName || 'N/A'}, Short Code: ${s.schoolShortCode || 'N/A'})`))
 
     if (shopsError) {
       return NextResponse.json(
@@ -244,14 +345,14 @@ export async function POST(request: NextRequest) {
       const productTags = row['Line items: Product Tags'] || ''
       
       // Finde Shop basierend auf Product Tags
-      const shopId = findShopByProductTags(shops, productTags)
+      const shopId = findShopByProductTags(shopsWithSchool, productTags)
       
       // Debug: Zeige Shop-Matching
       if (productTags && shopId) {
-        const shopName = shops.find(s => s.id === shopId)?.name || 'Unbekannt'
+        const shopName = shopsWithSchool.find(s => s.id === shopId)?.name || 'Unbekannt'
         console.log(`Product Tags "${productTags}" → Shop: ${shopName} (${shopId})`)
       } else if (productTags && !shopId) {
-        console.warn(`Product Tags "${productTags}" → Kein Shop gefunden. Verfügbare Slugs:`, shops.map(s => s.slug))
+        // Warnung wird bereits in findShopByProductTags ausgegeben
       }
       
       let orderKey: string
@@ -259,6 +360,13 @@ export async function POST(request: NextRequest) {
       let customerEmail: string | null
       let className: string | null
       let orderDate: string | null
+      let totalPriceFromFile: number | null = null
+
+      // Extrahiere Total Price aus Datei falls vorhanden
+      const totalPriceStr = row['Total price'] || row['Total Amount'] || row['Total'] || null
+      if (totalPriceStr) {
+        totalPriceFromFile = parseFloat(totalPriceStr.toString().replace(',', '.').replace(/[^\d.-]/g, '')) || null
+      }
 
       if (orderNumber) {
         // Gruppiere nach Order Number
@@ -323,17 +431,24 @@ export async function POST(request: NextRequest) {
 
       if (!ordersMap.has(orderKey)) {
         ordersMap.set(orderKey, {
+          orderNumber: orderNumber || null,
           shopId: shopId,
           customerName: customerName.trim() || 'Unbekannt',
           customerEmail: customerEmail ? (typeof customerEmail === 'string' ? customerEmail.trim() : String(customerEmail)) : null,
           className: className ? (typeof className === 'string' ? className.trim() : String(className)) : null,
           items: [],
           totalAmount: 0,
+          totalPriceFromFile: totalPriceFromFile,
           orderDate: orderDate,
         })
       }
 
       const order = ordersMap.get(orderKey)!
+
+      // Aktualisiere totalPriceFromFile falls vorhanden (nimm den letzten/höchsten Wert)
+      if (totalPriceFromFile !== null && (order.totalPriceFromFile === null || totalPriceFromFile > (order.totalPriceFromFile || 0))) {
+        order.totalPriceFromFile = totalPriceFromFile
+      }
 
       // Wenn shopId noch nicht gesetzt, versuche es jetzt zu setzen (aus dieser Zeile)
       if (!order.shopId && shopId) {
@@ -341,7 +456,7 @@ export async function POST(request: NextRequest) {
         console.log(`Shop-ID für Order ${orderKey} gesetzt: ${shopId}`)
       } else if (!order.shopId) {
         // Versuche Shop aus Product Tags dieser Zeile zu finden
-        const shopIdFromTags = findShopByProductTags(shops, productTags)
+        const shopIdFromTags = findShopByProductTags(shopsWithSchool, productTags)
         if (shopIdFromTags) {
           order.shopId = shopIdFromTags
           console.log(`Shop-ID für Order ${orderKey} aus Tags gesetzt: ${shopIdFromTags}`)
@@ -403,6 +518,90 @@ export async function POST(request: NextRequest) {
       order.totalAmount += finalPrice * quantity
     }
 
+    // OPTIMIERUNG: Lade alle Daten auf einmal statt pro Order
+    const shopIds = Array.from(new Set(Array.from(ordersMap.values()).map(o => o.shopId).filter(Boolean) as string[]))
+    
+    // Lade alle Produkte für alle betroffenen Shops auf einmal
+    const { data: allProducts } = await supabase
+      .from('products')
+      .select('id, name, base_price, shop_id')
+      .in('shop_id', shopIds)
+      .eq('active', true)
+    
+    // Gruppiere Produkte nach Shop
+    const productsByShop = new Map<string, typeof allProducts>()
+    allProducts?.forEach(p => {
+      if (!productsByShop.has(p.shop_id)) {
+        productsByShop.set(p.shop_id, [])
+      }
+      productsByShop.get(p.shop_id)!.push(p)
+    })
+    
+    // Lade alle Varianten auf einmal
+    const allProductIds = allProducts?.map(p => p.id) || []
+    const { data: allVariants } = allProductIds.length > 0 ? await supabase
+      .from('product_variants')
+      .select('id, product_id, name, color_name, additional_price')
+      .in('product_id', allProductIds)
+      .eq('active', true) : { data: null }
+    
+    // Lade alle bestehenden Orders für alle betroffenen Shops auf einmal
+    const { data: allExistingOrders } = shopIds.length > 0 ? await supabase
+      .from('orders')
+      .select('id, shop_id, customer_name, customer_email, total_amount, created_at')
+      .in('shop_id', shopIds) : { data: null }
+    
+    // Lade alle bestehenden Order Items auf einmal
+    const existingOrderIds = allExistingOrders?.map(o => o.id) || []
+    const { data: allExistingItems } = existingOrderIds.length > 0 ? await supabase
+      .from('order_items')
+      .select('id, order_id, product_id, variant_id, quantity, unit_price')
+      .in('order_id', existingOrderIds) : { data: null }
+    
+    // Erstelle Maps für schnelles Lookup
+    const existingOrdersMap = new Map<string, typeof allExistingOrders[0]>()
+    allExistingOrders?.forEach(order => {
+      // Erstelle Key basierend auf Shop, Customer Name, Email und Date (ungefähr)
+      const orderDate = new Date(order.created_at)
+      const dateKey = `${orderDate.getFullYear()}-${orderDate.getMonth()}-${orderDate.getDate()}`
+      const key = `${order.shop_id}-${order.customer_name}-${order.customer_email || ''}-${dateKey}`
+      // Speichere die neueste Order für diesen Key
+      if (!existingOrdersMap.has(key) || new Date(order.created_at) > new Date(existingOrdersMap.get(key)!.created_at)) {
+        existingOrdersMap.set(key, order)
+      }
+    })
+    
+    const existingItemsByOrderId = new Map<string, typeof allExistingItems>()
+    allExistingItems?.forEach(item => {
+      if (!existingItemsByOrderId.has(item.order_id)) {
+        existingItemsByOrderId.set(item.order_id, [])
+      }
+      existingItemsByOrderId.get(item.order_id)!.push(item)
+    })
+    
+    // Erstelle Varianten-Map für alle Shops
+    const variantsMap = new Map<string, NonNullable<typeof allVariants>[0]>()
+    allVariants?.forEach(v => {
+      // Erstelle Keys für Kombinations-Varianten (Größe + Farbe)
+      if (v.name && v.name.trim() && v.color_name && v.color_name.trim()) {
+        const comboKey = `${v.product_id}-combo-${v.name.toLowerCase().trim()} / ${v.color_name.toLowerCase().trim()}`
+        variantsMap.set(comboKey, v)
+      }
+      // Erstelle Keys für Größen-Varianten
+      if (v.name && v.name.trim() && !v.color_name) {
+        const sizeKey = `${v.product_id}-size-${v.name.toLowerCase().trim()}`
+        variantsMap.set(sizeKey, v)
+      }
+      // Erstelle Keys für Farb-Varianten
+      if (v.color_name && v.color_name.trim()) {
+        const colorKey = `${v.product_id}-color-${v.color_name.toLowerCase().trim()}`
+        variantsMap.set(colorKey, v)
+      }
+      // Fallback: Original Key für Kompatibilität
+      const originalKey = `${v.product_id}-${(v.name || '').toLowerCase().trim()}`
+      variantsMap.set(originalKey, v)
+    })
+
     // Erstelle Bestellungen in Datenbank
     const createdOrders = []
     const errors = []
@@ -416,79 +615,89 @@ export async function POST(request: NextRequest) {
           continue
         }
 
-        // Lade Produkte für diesen Shop (falls vorhanden)
-        const { data: products } = await supabase
-          .from('products')
-          .select('id, name, base_price')
-          .eq('shop_id', orderData.shopId)
-          .eq('active', true)
-
-        const productsMap = new Map(products?.map(p => [p.name.toLowerCase().trim(), p]) || [])
+        // Verwende bereits geladene Produkte für diesen Shop
+        const products = productsByShop.get(orderData.shopId) || []
+        const productsMap = new Map(products.map(p => [p.name.toLowerCase().trim(), p]))
         
-        // Debug: Zeige verfügbare Produkte
-        if (products && products.length > 0) {
-          console.log(`Shop ${orderData.shopId} hat ${products.length} Produkt(e):`, products.map(p => p.name))
+        // Varianten-Map wurde bereits außerhalb der Schleife erstellt und kann direkt verwendet werden
+
+        // Prüfe ob Order bereits existiert (basierend auf Shop, Customer, Email, Date)
+        let existingOrder = null
+        let existingItemsMap = new Map<string, { id: string; quantity: number }>()
+        
+        if (orderData.orderDate) {
+          const orderDate = new Date(orderData.orderDate)
+          const dateKey = `${orderDate.getFullYear()}-${orderDate.getMonth()}-${orderDate.getDate()}`
+          const lookupKey = `${orderData.shopId}-${orderData.customerName}-${orderData.customerEmail || ''}-${dateKey}`
+          existingOrder = existingOrdersMap.get(lookupKey) || null
         } else {
-          console.log(`Shop ${orderData.shopId} hat noch keine Produkte - werden automatisch erstellt`)
+          // Fallback: Suche ohne Date
+          const lookupKey = `${orderData.shopId}-${orderData.customerName}-${orderData.customerEmail || ''}-`
+          for (const [key, order] of existingOrdersMap.entries()) {
+            if (key.startsWith(lookupKey)) {
+              existingOrder = order
+              break
+            }
+          }
         }
 
-        // Lade Varianten
-        const productIds = products?.map(p => p.id) || []
-        const { data: variants } = await supabase
-          .from('product_variants')
-          .select('id, product_id, name, color_name, additional_price')
-          .in('product_id', productIds)
-          .eq('active', true)
-
-        const variantsMap = new Map<string, NonNullable<typeof variants>[0]>()
-        variants?.forEach(v => {
-          // Erstelle Keys für Kombinations-Varianten (Größe + Farbe)
-          if (v.name && v.name.trim() && v.color_name && v.color_name.trim()) {
-            const comboKey = `${v.product_id}-combo-${v.name.toLowerCase().trim()} / ${v.color_name.toLowerCase().trim()}`
-            variantsMap.set(comboKey, v)
+        let order
+        if (existingOrder) {
+          // Erweitere bestehende Order
+          console.log(`Erweitere bestehende Order ${existingOrder.id} (Order Number: ${orderData.orderNumber || orderKey})`)
+          order = existingOrder
+          
+          // Verwende bereits geladene bestehende Order Items
+          const existingItems = existingItemsByOrderId.get(order.id) || []
+          
+          // Speichere bestehende Items für späteren Vergleich
+          existingItems.forEach(item => {
+            const key = `${item.product_id}-${item.variant_id || 'no-variant'}`
+            existingItemsMap.set(key, { id: item.id, quantity: item.quantity })
+          })
+          
+          // Aktualisiere total_amount falls totalPriceFromFile vorhanden ist
+          if (orderData.totalPriceFromFile !== null) {
+            const newTotalAmount = Math.round(orderData.totalPriceFromFile * 100) / 100
+            await supabase
+              .from('orders')
+              .update({ total_amount: newTotalAmount })
+              .eq('id', order.id)
+            order.total_amount = newTotalAmount
           }
-          // Erstelle Keys für Größen-Varianten
-          if (v.name && v.name.trim() && !v.color_name) {
-            const sizeKey = `${v.product_id}-size-${v.name.toLowerCase().trim()}`
-            variantsMap.set(sizeKey, v)
+        } else {
+          // Erstelle neue Order
+          // Formatiere total_amount - verwende totalPriceFromFile falls vorhanden, sonst berechne aus Items
+          const totalAmount = orderData.totalPriceFromFile !== null 
+            ? Math.round(orderData.totalPriceFromFile * 100) / 100
+            : Math.round(orderData.totalAmount * 100) / 100
+          
+          const { data: newOrder, error: orderError } = await supabase
+            .from('orders')
+            .insert([{
+              shop_id: orderData.shopId,
+              customer_name: orderData.customerName,
+              customer_email: orderData.customerEmail || null,
+              class_name: orderData.className || null,
+              status: 'pending',
+              total_amount: totalAmount,
+              created_at: orderData.orderDate || new Date().toISOString(),
+            }])
+            .select()
+            .single()
+
+          if (orderError) {
+            console.error('Order insertion error:', orderError)
+            errors.push({ orderKey, error: orderError.message })
+            continue
           }
-          // Erstelle Keys für Farb-Varianten
-          if (v.color_name && v.color_name.trim()) {
-            const colorKey = `${v.product_id}-color-${v.color_name.toLowerCase().trim()}`
-            variantsMap.set(colorKey, v)
+
+          if (!newOrder) {
+            errors.push({ orderKey, error: 'Order wurde nicht erstellt' })
+            continue
           }
-          // Fallback: Original Key für Kompatibilität
-          const originalKey = `${v.product_id}-${(v.name || '').toLowerCase().trim()}`
-          variantsMap.set(originalKey, v)
-        })
-
-        // Formatiere total_amount
-        const totalAmount = Math.round(orderData.totalAmount * 100) / 100
-        
-        // Erstelle Order
-        const { data: order, error: orderError } = await supabase
-          .from('orders')
-          .insert([{
-            shop_id: orderData.shopId,
-            customer_name: orderData.customerName,
-            customer_email: orderData.customerEmail || null,
-            class_name: orderData.className || null,
-            status: 'pending',
-            total_amount: totalAmount,
-            created_at: orderData.orderDate || new Date().toISOString(),
-          }])
-          .select()
-          .single()
-
-        if (orderError) {
-          console.error('Order insertion error:', orderError)
-          errors.push({ orderKey, error: orderError.message })
-          continue
-        }
-
-        if (!order) {
-          errors.push({ orderKey, error: 'Order wurde nicht erstellt' })
-          continue
+          
+          order = newOrder
         }
 
         // Erstelle Order Items
@@ -631,6 +840,17 @@ export async function POST(request: NextRequest) {
           const unitPrice = Math.round(item.unitPrice * 100) / 100
           const lineTotal = Math.round(unitPrice * quantity * 100) / 100
 
+          // Prüfe ob dieses Item bereits existiert (nur bei bestehenden Orders)
+          const itemKey = `${product.id}-${variantId || 'no-variant'}`
+          const existingItem = existingItemsMap.get(itemKey)
+          
+          if (existingItem) {
+            // Item existiert bereits - aktualisiere Quantity und Preis falls nötig
+            console.log(`Item bereits vorhanden: Produkt ${product.id}, Variante ${variantId || 'keine'}. Überspringe Duplikat.`)
+            // Optional: Könnte hier die Quantity aktualisieren, aber wir überspringen es erstmal
+            continue
+          }
+
           orderItems.push({
             order_id: order.id,
             product_id: product.id,
@@ -650,35 +870,59 @@ export async function POST(request: NextRequest) {
             console.error('Order items insertion error:', itemsError)
             console.error('Order items that failed:', JSON.stringify(orderItems, null, 2))
             errors.push({ orderKey, error: `Order Items: ${itemsError.message}` })
-            await supabase.from('orders').delete().eq('id', order.id)
+            // Lösche Order nur wenn es eine neue Order ist
+            if (!existingOrder) {
+              await supabase.from('orders').delete().eq('id', order.id)
+            }
             continue
           }
           
-          console.log(`✓ Order ${orderKey}: ${orderItems.length} Item(s) erfolgreich erstellt`)
+          if (existingOrder) {
+            console.log(`✓ Bestehende Order ${orderKey} erweitert: ${orderItems.length} neue Item(s) hinzugefügt`)
+          } else {
+            console.log(`✓ Order ${orderKey}: ${orderItems.length} Item(s) erfolgreich erstellt`)
+          }
           
           // Info wenn Produkte automatisch erstellt wurden
           if (createdProducts.length > 0) {
             console.log(`Order ${orderKey}: ${createdProducts.length} Produkt(e) automatisch erstellt:`, createdProducts)
           }
         } else {
-          // Wenn keine Items erstellt werden konnten, lösche die Order
-          console.warn(`⚠ Order ${orderKey}: Keine Items konnten erstellt werden. Ursprüngliche Items:`, orderData.items.length)
-          await supabase.from('orders').delete().eq('id', order.id)
-          errors.push({ orderKey, error: `Order hat keine gültigen Items - ${orderData.items.length} Item(s) in CSV, aber 0 konnten verarbeitet werden` })
-          continue
+          // Wenn keine neuen Items hinzugefügt werden konnten
+          if (existingOrder) {
+            // Bei bestehenden Orders: Alle Items waren bereits vorhanden - das ist OK
+            console.log(`✓ Bestehende Order ${orderKey}: Alle Items waren bereits vorhanden, keine neuen Items hinzugefügt`)
+          } else {
+            // Bei neuen Orders: Wenn keine Items erstellt werden konnten, lösche die Order
+            console.warn(`⚠ Order ${orderKey}: Keine Items konnten erstellt werden. Ursprüngliche Items:`, orderData.items.length)
+            await supabase.from('orders').delete().eq('id', order.id)
+            errors.push({ orderKey, error: `Order hat keine gültigen Items - ${orderData.items.length} Item(s) in CSV, aber 0 konnten verarbeitet werden` })
+            continue
+          }
         }
 
+        // Zähle neue Items (nicht bestehende Items)
+        const newItemCount = orderItems.length
+        const existingItemCount = existingOrder ? (existingItemsMap.size) : 0
+        const finalTotalAmount = order.total_amount || (orderData.totalPriceFromFile !== null 
+          ? Math.round(orderData.totalPriceFromFile * 100) / 100
+          : Math.round(orderData.totalAmount * 100) / 100)
+        
         createdOrders.push({
           id: order.id,
           shopId: orderData.shopId,
           customerName: orderData.customerName,
-          totalAmount: totalAmount,
-          itemCount: orderItems.length,
+          totalAmount: finalTotalAmount,
+          itemCount: newItemCount,
+          existingItemCount: existingItemCount,
+          isExtended: !!existingOrder,
         })
 
-        // Statistiken
-        const shopName = shops.find(s => s.id === orderData.shopId)?.name || 'Unbekannt'
-        shopStats.set(shopName, (shopStats.get(shopName) || 0) + 1)
+        // Statistiken - zähle nur neue Orders, nicht erweiterte
+        if (!existingOrder) {
+          const shopName = shopsWithSchool.find(s => s.id === orderData.shopId)?.name || 'Unbekannt'
+          shopStats.set(shopName, (shopStats.get(shopName) || 0) + 1)
+        }
       } catch (error: any) {
         console.error(`Error processing order ${orderKey}:`, error)
         errors.push({ orderKey, error: error.message })

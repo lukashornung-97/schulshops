@@ -11,13 +11,49 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow, format } from 'date-fns'
-import { de } from 'date-fns/locale/de'
+import { de } from 'date-fns/locale'
 
 type School = Database['public']['Tables']['schools']['Row']
 type Shop = Database['public']['Tables']['shops']['Row']
 
 interface SchoolWithShops extends School {
   shops: Shop[]
+}
+
+// Hilfsfunktion: Prüft ob ein Shop wirklich "live" ist
+// Ein Shop ist nur live, wenn status='live' UND shop_close_at nicht in der Vergangenheit liegt
+function isShopReallyLive(shop: Shop): boolean {
+  if (shop.status !== 'live') return false
+  if (shop.shop_close_at) {
+    const closeDate = new Date(shop.shop_close_at)
+    const now = new Date()
+    if (closeDate < now) return false
+  }
+  return true
+}
+
+// Funktion: Prüft und schließt Shops automatisch, deren shop_close_at in der Vergangenheit liegt
+async function checkAndCloseExpiredShops(shops: Shop[]): Promise<void> {
+  const now = new Date()
+  const shopsToClose = shops.filter(
+    (shop) => shop.status === 'live' && shop.shop_close_at && new Date(shop.shop_close_at) < now
+  )
+
+  if (shopsToClose.length > 0) {
+    // Schließe alle abgelaufenen Shops
+    await Promise.all(
+      shopsToClose.map(async (shop) => {
+        const { error } = await supabase
+          .from('shops')
+          .update({ status: 'closed' })
+          .eq('id', shop.id)
+
+        if (error) {
+          console.error(`Error closing shop ${shop.id}:`, error)
+        }
+      })
+    )
+  }
 }
 
 export default function Home() {
@@ -46,6 +82,13 @@ export default function Home() {
       }
 
       const currentStatus = schoolData?.status
+
+      // Wenn der Status manuell auf 'production' oder 'existing' gesetzt wurde,
+      // überschreibe ihn nicht automatisch
+      if (currentStatus === 'production' || currentStatus === 'existing') {
+        console.log('School status is manually set to', currentStatus, '- not auto-updating')
+        return
+      }
 
       // Wenn ein Shop aktiv ist, setze Schule auf 'active'
       if (hasActiveShop && currentStatus !== 'active') {
@@ -88,8 +131,23 @@ export default function Home() {
             return { ...school, shops: [] }
           }
 
-          // Prüfe ob ein Shop aktiv ist
-          const hasActiveShop = shopsData?.some((shop) => shop.status === 'live') || false
+          // Prüfe und schließe abgelaufene Shops automatisch
+          let finalShopsData = shopsData || []
+          if (finalShopsData.length > 0) {
+            await checkAndCloseExpiredShops(finalShopsData)
+            // Lade Shops erneut, um die aktualisierten Status zu erhalten
+            const { data: updatedShopsData } = await supabase
+              .from('shops')
+              .select('*')
+              .eq('school_id', school.id)
+              .order('created_at', { ascending: false })
+            if (updatedShopsData) {
+              finalShopsData = updatedShopsData
+            }
+          }
+
+          // Prüfe ob ein Shop aktiv ist (wirklich live, nicht nur Status='live')
+          const hasActiveShop = finalShopsData.some((shop) => isShopReallyLive(shop)) || false
 
           // Aktualisiere Schulstatus automatisch wenn nötig
           if (hasActiveShop) {
@@ -98,20 +156,23 @@ export default function Home() {
             school.status = 'active'
           }
 
-          return { ...school, shops: shopsData || [] }
+          return { ...school, shops: finalShopsData }
         })
       )
 
       setSchools(schoolsWithShops)
     } catch (error) {
       console.error('Error loading schools:', error)
-    } finally {
       setLoading(false)
+      // Zeige Fehler an, falls vorhanden
+      if (error instanceof Error) {
+        console.error('Error details:', error.message)
+      }
     }
   }
 
   function getShopStatus(school: SchoolWithShops) {
-    const liveShop = school.shops.find((shop) => shop.status === 'live')
+    const liveShop = school.shops.find((shop) => isShopReallyLive(shop))
     const closedShops = school.shops
       .filter((shop) => shop.status === 'closed' && shop.shop_close_at)
       .sort((a, b) => {
