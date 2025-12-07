@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * Shopify OAuth Flow
- * 
+ *
  * Schritt 1: Authorization URL generieren
- * GET /api/shopify/oauth?shop=shop-name.myshopify.com
- * 
+ * GET /api/shopify/oauth?shop=shop-name.myshopify.com&shopId=UUID
+ *
  * Schritt 2: Access Token austauschen (nach Redirect)
- * POST /api/shopify/oauth/token
+ * POST /api/shopify/oauth
  */
 
 const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID
@@ -20,6 +20,7 @@ const SHOPIFY_REDIRECT_URI = process.env.SHOPIFY_REDIRECT_URI || 'http://localho
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
   const shop = searchParams.get('shop')
+  const shopId = searchParams.get('shopId') || undefined
 
   if (!shop) {
     return NextResponse.json(
@@ -37,15 +38,19 @@ export async function GET(request: NextRequest) {
 
   // Scopes die wir benötigen
   const scopes = 'read_products,write_products'
-  
+
   // Stelle sicher, dass die Redirect URI korrekt ist
   const redirectUri = SHOPIFY_REDIRECT_URI || `${request.nextUrl.origin}/api/shopify/oauth/callback`
-  
+
+   // Optionaler state-Parameter: interner Shop-ID Kontext
+  const state = shopId ?? ''
+
   // Authorization URL
   const authUrl = `https://${shop}/admin/oauth/authorize?` +
     `client_id=${SHOPIFY_CLIENT_ID}&` +
     `scope=${scopes}&` +
-    `redirect_uri=${encodeURIComponent(redirectUri)}`
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `state=${encodeURIComponent(state)}`
 
   return NextResponse.json({
     authUrl,

@@ -558,36 +558,90 @@ export default function ShopDetail() {
     }
   }
 
-  function handleShopifyDialogSubmit() {
-    if (shopifyCredentials.shopDomain && shopifyCredentials.accessToken) {
-      // Teste die Verbindung vor dem Speichern
-      testShopifyConnection()
+  async function handleShopifyDialogSubmit() {
+    if (!shopifyCredentials.shopDomain || !shopifyCredentials.accessToken) {
+      return
+    }
+
+    // Teste die Verbindung vor dem Speichern
+    if (!connectionTestResult?.success) {
+      await testShopifyConnection()
+      // Warte kurz, damit der Test abgeschlossen wird
+      await new Promise(resolve => setTimeout(resolve, 500))
+      if (!connectionTestResult?.success) {
+        return // Test fehlgeschlagen, nicht speichern
+      }
+    }
+
+    // Speichere in der Datenbank
+    try {
+      const response = await fetch('/api/shopify/save-connection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shopId: shop?.id,
+          shopDomain: shopifyCredentials.shopDomain,
+          accessToken: shopifyCredentials.accessToken,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        // Speichere auch lokal für schnellen Zugriff
+        localStorage.setItem('shopify_credentials', JSON.stringify(shopifyCredentials))
+        setShopifyDialogOpen(false)
+        alert('Shopify-Verbindung erfolgreich gespeichert!')
+      } else {
+        alert(`Fehler beim Speichern: ${data.error}`)
+      }
+    } catch (error: any) {
+      console.error('Error saving connection:', error)
+      alert(`Fehler beim Speichern der Verbindung: ${error.message}`)
     }
   }
 
   useEffect(() => {
-    // Lade gespeicherte Shopify-Credentials
-    const saved = localStorage.getItem('shopify_credentials')
-    if (saved) {
+    // Lade Shopify-Verbindung aus der Datenbank, wenn Shop geladen ist
+    async function loadShopifyConnection() {
+      if (!shop?.id) return
+
       try {
-        setShopifyCredentials(JSON.parse(saved))
-      } catch (e) {
-        // Ignore
+        const response = await fetch(`/api/shopify/get-connection?shopId=${shop.id}`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.success && data.connection) {
+            setShopifyCredentials({
+              shopDomain: data.connection.shop_domain,
+              accessToken: data.connection.access_token,
+            })
+            // Speichere auch lokal für schnellen Zugriff
+            localStorage.setItem('shopify_credentials', JSON.stringify({
+              shopDomain: data.connection.shop_domain,
+              accessToken: data.connection.access_token,
+            }))
+            return
+          }
+        }
+      } catch (error) {
+        console.error('Error loading Shopify connection:', error)
       }
-    } else {
-      // Fallback: Verwende Standard-Credentials falls vorhanden
-      // Diese können in .env.local gesetzt werden
-      const defaultDomain = process.env.NEXT_PUBLIC_SHOPIFY_SHOP_DOMAIN
-      const defaultToken = process.env.NEXT_PUBLIC_SHOPIFY_ACCESS_TOKEN
-      
-      if (defaultDomain && defaultToken) {
-        setShopifyCredentials({
-          shopDomain: defaultDomain,
-          accessToken: defaultToken,
-        })
+
+      // Fallback: Lade aus localStorage (nur Komfort, Token kommt idealerweise aus DB/OAuth)
+      const saved = localStorage.getItem('shopify_credentials')
+      if (saved) {
+        try {
+          setShopifyCredentials(JSON.parse(saved))
+        } catch (e) {
+          // Ignore
+        }
       }
     }
-  }, [])
+
+    loadShopifyConnection()
+  }, [shop?.id])
 
   if (loading) {
     return (
@@ -990,8 +1044,12 @@ export default function ShopDetail() {
                   alert('Bitte geben Sie zuerst die Shop Domain ein')
                   return
                 }
-                // Starte OAuth Flow
-                const response = await fetch(`/api/shopify/oauth?shop=${shopifyCredentials.shopDomain}`)
+                // Starte OAuth Flow mit Shop-Domain und interner Shop-ID als state
+                const response = await fetch(
+                  `/api/shopify/oauth?shop=${encodeURIComponent(
+                    shopifyCredentials.shopDomain
+                  )}&shopId=${encodeURIComponent(shop?.id || '')}`
+                )
                 const data = await response.json()
                 if (data.authUrl) {
                   window.location.href = data.authUrl

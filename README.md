@@ -74,10 +74,21 @@ schulshop/
 - **Material-UI (MUI)** - Material Design Komponenten
 - **Supabase** - Backend-as-a-Service (PostgreSQL, Auth, etc.)
 
+## Shopify Integration
+
+Die App unterstützt die Integration mit Shopify für den Export von Produkten:
+
+- ✅ **OAuth-Flow** für sichere Authentifizierung
+- ✅ **Produkterstellung** mit Bildern und Produktoptionen
+- ✅ **Token-Verwaltung** in der Datenbank (`shopify_connections`)
+- ⚠️ **Variantenerstellung**: Aktuell wird nur das Basisprodukt erstellt. Varianten müssen separat via `productVariantsBulkCreate` angelegt werden (in Arbeit)
+
+Siehe `SHOPIFY_CREATE_PRODUCT_WITH_IMAGES.md` für Details zur Shopify-Integration.
+
 ## Nächste Schritte
 
 - Authentifizierung implementieren
-- Produkt-Varianten-Verwaltung
+- **Shopify Variantenerstellung** via `productVariantsBulkCreate` implementieren
 - Bestellungs-Details-Seite
 - Rollenverwaltung
 - Dashboard mit Statistiken
