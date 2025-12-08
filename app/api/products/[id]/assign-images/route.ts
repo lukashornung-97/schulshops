@@ -243,16 +243,43 @@ export async function POST(
           newEntry.print_file_url = printFileUrl
         }
 
-        // Finde Varianten-ID falls vorhanden
-        const { data: variant } = await supabaseAdmin
+        // Finde Varianten-ID falls vorhanden, sonst erstelle eine neue Variante
+        let variantId: string | null = null
+        
+        const { data: existingVariant } = await supabaseAdmin
           .from('product_variants')
           .select('id')
           .eq('product_id', params.id)
           .eq('color_name', color)
-          .single()
+          .maybeSingle()
 
-        if (variant) {
-          newEntry.textile_color_id = variant.id
+        if (existingVariant) {
+          variantId = existingVariant.id
+        } else {
+          // Erstelle neue Variante für diese Farbe
+          const { data: newVariant, error: variantError } = await supabaseAdmin
+            .from('product_variants')
+            .insert([{
+              product_id: params.id,
+              name: '', // Keine Größe, nur Farbe
+              color_name: color,
+              active: true,
+              additional_price: 0,
+            }])
+            .select('id')
+            .single()
+
+          if (variantError) {
+            console.error(`Fehler beim Erstellen der Variante für Farbe "${color}":`, variantError)
+            // Fortfahren ohne Varianten-ID
+          } else if (newVariant) {
+            variantId = newVariant.id
+            console.log(`✓ Variante für Farbe "${color}" erstellt (ID: ${newVariant.id})`)
+          }
+        }
+
+        if (variantId) {
+          newEntry.textile_color_id = variantId
         }
 
         const { error: insertError } = await supabaseAdmin

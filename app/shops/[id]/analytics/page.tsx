@@ -602,6 +602,20 @@ export default function ShopAnalytics() {
         }
       })
 
+      // Berechne maximale Anzahl von Farben über alle Produkte
+      let maxColors = 0
+      analytics.forEach((productAnalytics: any) => {
+        const colors = getAllColors(productAnalytics)
+        if (colors.length > maxColors) {
+          maxColors = colors.length
+        }
+      })
+      
+      // Berechne dynamische Startspalte für Druckdatei-Auswertung
+      // Format: [Größe] [Farbe1] [Farbe2] ... [FarbeN] [Gesamt]
+      // Also: 1 (Größe) + maxColors (Farben) + 1 (Gesamt) + 2 (Abstand) = maxColors + 4
+      const printFileStartColumn = Math.max(7, maxColors + 4) // Mindestens Spalte G (7), sonst dynamisch
+
       worksheet.columns.forEach((column, index) => {
         if (index === 0) {
           column.width = 20
@@ -610,8 +624,7 @@ export default function ShopAnalytics() {
         }
       })
 
-      // Auswertung nach Druckdateien (rechts im Worksheet)
-      const printFileStartColumn = 7 // Spalte G
+      // Auswertung nach Druckdateien (rechts im Worksheet, dynamisch positioniert)
       let printFileRow = 1
 
       // Sammle Daten nach Druckdateien

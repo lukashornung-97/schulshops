@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { Container, Typography, Box, Card, CardContent, Grid, Fab, Chip, Tabs, Tab, Menu, MenuItem, IconButton } from '@mui/material'
 import { supabase } from '@/lib/supabase'
 import { Database } from '@/types/database'
@@ -62,6 +62,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState(0)
   const [statusMenuAnchor, setStatusMenuAnchor] = useState<{ element: HTMLElement; schoolId: string } | null>(null)
   const router = useRouter()
+  const loadingRef = useRef(false)
 
   useEffect(() => {
     loadSchools()
@@ -109,6 +110,15 @@ export default function Home() {
   }
 
   async function loadSchools() {
+    // Verhindere mehrfache gleichzeitige Aufrufe
+    if (loadingRef.current) {
+      console.log('loadSchools already in progress, skipping...')
+      return
+    }
+    
+    loadingRef.current = true
+    setLoading(true)
+    
     try {
       const { data: schoolsData, error: schoolsError } = await supabase
         .from('schools')
@@ -149,11 +159,14 @@ export default function Home() {
           // Prüfe ob ein Shop aktiv ist (wirklich live, nicht nur Status='live')
           const hasActiveShop = finalShopsData.some((shop) => isShopReallyLive(shop)) || false
 
-          // Aktualisiere Schulstatus automatisch wenn nötig
-          if (hasActiveShop) {
-            await updateSchoolStatusIfNeeded(school.id, true)
-            // Aktualisiere den Status im lokalen State
-            school.status = 'active'
+          // Aktualisiere Schulstatus automatisch wenn nötig (nur wenn Status nicht manuell gesetzt wurde)
+          // Vermeide unnötige Updates, die zu Re-Renders führen könnten
+          if (hasActiveShop && school.status !== 'production' && school.status !== 'existing') {
+            // Nur aktualisieren wenn Status noch nicht 'active' ist
+            if (school.status !== 'active') {
+              await updateSchoolStatusIfNeeded(school.id, true)
+              school.status = 'active'
+            }
           }
 
           return { ...school, shops: finalShopsData }
@@ -163,11 +176,13 @@ export default function Home() {
       setSchools(schoolsWithShops)
     } catch (error) {
       console.error('Error loading schools:', error)
-      setLoading(false)
       // Zeige Fehler an, falls vorhanden
       if (error instanceof Error) {
         console.error('Error details:', error.message)
       }
+    } finally {
+      setLoading(false)
+      loadingRef.current = false
     }
   }
 

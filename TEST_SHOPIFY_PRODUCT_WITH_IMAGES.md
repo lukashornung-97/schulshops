@@ -155,3 +155,5 @@ Nach erfolgreichem Test können Sie:
 3. Automatische Synchronisation einrichten
 4. Bild-Upload zu Shopify optimieren (falls nötig)
 
+
+

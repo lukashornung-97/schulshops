@@ -23,6 +23,7 @@ interface OrderRow {
   'Line items: Price'?: string
   'Total Amount'?: string
   'Total'?: string
+  'Subtotal price'?: string
   'Order Date'?: string
   'Created at'?: string
   'Created at (UTC)'?: string

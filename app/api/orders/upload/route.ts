@@ -23,7 +23,7 @@ interface OrderRow {
   'Line items: Price'?: string
   'Total Amount'?: string
   'Total'?: string
-  'Total price'?: string // Neues Feld für Gesamtpreis
+  'Subtotal price'?: string // Neues Feld für Gesamtpreis
   'Order Date'?: string
   'Created at'?: string
   'Created at (UTC)'?: string
@@ -363,7 +363,7 @@ export async function POST(request: NextRequest) {
       let totalPriceFromFile: number | null = null
 
       // Extrahiere Total Price aus Datei falls vorhanden
-      const totalPriceStr = row['Total price'] || row['Total Amount'] || row['Total'] || null
+      const totalPriceStr = row['Subtotal price'] || row['Total Amount'] || row['Total'] || null
       if (totalPriceStr) {
         totalPriceFromFile = parseFloat(totalPriceStr.toString().replace(',', '.').replace(/[^\d.-]/g, '')) || null
       }
@@ -709,15 +709,9 @@ export async function POST(request: NextRequest) {
           const normalizedProductName = item.productName.toLowerCase().trim()
           let product = productsMap.get(normalizedProductName)
           
-          if (!product) {
-            // Versuche Teilübereinstimmung
-            for (const [key, prod] of productsMap.entries()) {
-              if (normalizedProductName.includes(key) || key.includes(normalizedProductName)) {
-                product = prod
-                break
-              }
-            }
-          }
+          // KEINE Teilübereinstimmungen mehr - nur exakte Matches
+          // Wenn kein exaktes Match gefunden wird, wird ein neues Produkt erstellt
+          // Das verhindert falsche Zuordnungen wie "Bio Hoodie Schullogo" → "Bio Hoodie Schullogo + Bock"
 
           // Wenn Produkt nicht gefunden, erstelle es automatisch
           if (!product) {

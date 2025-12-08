@@ -165,6 +165,9 @@ export default function SchoolDetail() {
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [sendingNotification, setSendingNotification] = useState<string | null>(null)
   const [exportingAnalytics, setExportingAnalytics] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [schoolName, setSchoolName] = useState('')
+  const [savingName, setSavingName] = useState(false)
 
   useEffect(() => {
     if (params.id) {
@@ -185,9 +188,58 @@ export default function SchoolDetail() {
 
       if (error) throw error
       setSchool(data)
+      setSchoolName(data?.name || '')
     } catch (error) {
       console.error('Error loading school:', error)
     }
+  }
+
+  async function handleSaveName() {
+    if (!school || !schoolName.trim()) {
+      setSnackbar({
+        open: true,
+        message: 'Bitte geben Sie einen Namen ein',
+        severity: 'error',
+      })
+      return
+    }
+
+    if (schoolName.trim() === school.name) {
+      setEditingName(false)
+      return
+    }
+
+    setSavingName(true)
+    try {
+      const { error } = await supabase
+        .from('schools')
+        .update({ name: schoolName.trim() })
+        .eq('id', school.id)
+
+      if (error) throw error
+
+      setSchool({ ...school, name: schoolName.trim() })
+      setEditingName(false)
+      setSnackbar({
+        open: true,
+        message: 'Schulname erfolgreich aktualisiert',
+        severity: 'success',
+      })
+    } catch (error) {
+      console.error('Error updating school name:', error)
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? error.message : 'Fehler beim Aktualisieren des Namens',
+        severity: 'error',
+      })
+    } finally {
+      setSavingName(false)
+    }
+  }
+
+  function handleCancelEditName() {
+    setSchoolName(school?.name || '')
+    setEditingName(false)
   }
 
   async function handleStatusChange(newStatus: 'lead' | 'active' | 'production' | 'existing') {
@@ -1475,6 +1527,20 @@ export default function SchoolDetail() {
         }
       })
 
+      // Berechne maximale Anzahl von Farben über alle Produkte
+      let maxColors = 0
+      analytics.forEach((productAnalytics: any) => {
+        const colors = getAllColors(productAnalytics)
+        if (colors.length > maxColors) {
+          maxColors = colors.length
+        }
+      })
+      
+      // Berechne dynamische Startspalte für Druckdatei-Auswertung
+      // Format: [Größe] [Farbe1] [Farbe2] ... [FarbeN] [Gesamt]
+      // Also: 1 (Größe) + maxColors (Farben) + 1 (Gesamt) + 2 (Abstand) = maxColors + 4
+      const printFileStartColumn = Math.max(7, maxColors + 4) // Mindestens Spalte G (7), sonst dynamisch
+
       worksheet.columns.forEach((column, index) => {
         if (index === 0) {
           column.width = 20
@@ -1483,8 +1549,7 @@ export default function SchoolDetail() {
         }
       })
 
-      // Auswertung nach Druckdateien (rechts im Worksheet)
-      const printFileStartColumn = 7 // Spalte G
+      // Auswertung nach Druckdateien (rechts im Worksheet, dynamisch positioniert)
       let printFileRow = 1
 
       // Sammle Daten nach Druckdateien
@@ -2048,20 +2113,83 @@ export default function SchoolDetail() {
               <SchoolIcon sx={{ fontSize: 32, color: 'white' }} />
             </Box>
             <Box sx={{ flex: 1 }}>
-              <Typography 
-                variant="h3" 
-                component="h1"
-                sx={{ 
-                  fontWeight: 700,
-                  mb: 0.5,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
-                }}
-              >
-                {school.name}
-              </Typography>
+              {editingName ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <TextField
+                    value={schoolName}
+                    onChange={(e) => setSchoolName(e.target.value)}
+                    variant="outlined"
+                    size="small"
+                    disabled={savingName}
+                    sx={{
+                      flex: 1,
+                      '& .MuiOutlinedInput-root': {
+                        fontSize: '2rem',
+                        fontWeight: 700,
+                        borderRadius: 2,
+                      },
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSaveName()
+                      } else if (e.key === 'Escape') {
+                        handleCancelEditName()
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <IconButton
+                    onClick={handleSaveName}
+                    disabled={savingName || !schoolName.trim()}
+                    color="primary"
+                    size="small"
+                    sx={{ 
+                      bgcolor: 'primary.main',
+                      color: 'white',
+                      '&:hover': { bgcolor: 'primary.dark' },
+                      '&:disabled': { bgcolor: 'action.disabledBackground' },
+                    }}
+                  >
+                    <CheckCircleIcon />
+                  </IconButton>
+                  <IconButton
+                    onClick={handleCancelEditName}
+                    disabled={savingName}
+                    size="small"
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <Typography 
+                    variant="h3" 
+                    component="h1"
+                    sx={{ 
+                      fontWeight: 700,
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                      backgroundClip: 'text',
+                    }}
+                  >
+                    {school.name}
+                  </Typography>
+                  <IconButton
+                    onClick={() => setEditingName(true)}
+                    size="small"
+                    sx={{ 
+                      color: 'text.secondary',
+                      '&:hover': { 
+                        color: 'primary.main',
+                        bgcolor: 'action.hover',
+                      },
+                    }}
+                  >
+                    <EditIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              )}
               {school.short_code && (
                 <Typography 
                   variant="body1" 

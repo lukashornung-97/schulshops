@@ -69,6 +69,48 @@ export interface ShopifyProductVariant {
   sku?: string | null
 }
 
+/**
+ * Normalisiert Varianten, die Größe und Farbe im name-Feld kombinieren
+ * Erkennt Patterns wie "L/Off-White" oder "L / Off-White" und trennt sie
+ */
+export function normalizeVariant(variant: ShopifyProductVariant): ShopifyProductVariant {
+  // Wenn bereits color_name vorhanden ist, ist die Variante bereits normalisiert
+  if (variant.color_name) {
+    return variant
+  }
+
+  // Prüfe ob name-Feld ein "/" enthält (könnte Größe/Farbe sein)
+  const name = variant.name.trim()
+  const slashIndex = name.indexOf('/')
+  
+  if (slashIndex > 0 && slashIndex < name.length - 1) {
+    // Teile am "/"
+    const parts = name.split('/').map(p => p.trim()).filter(p => p.length > 0)
+    
+    if (parts.length === 2) {
+      // Erste Hälfte ist wahrscheinlich Größe, zweite Farbe
+      // Prüfe ob erste Hälfte wie eine Größe aussieht (kurz, oft nur Buchstaben/Zahlen)
+      const firstPart = parts[0]
+      const secondPart = parts[1]
+      
+      // Größen sind typischerweise kurz (1-4 Zeichen) und enthalten oft X, S, M, L, oder Zahlen
+      const sizePattern = /^[0-9XLSM]+$/i
+      const isLikelySize = sizePattern.test(firstPart) || firstPart.length <= 4
+      
+      if (isLikelySize) {
+        return {
+          ...variant,
+          name: firstPart,
+          color_name: secondPart,
+        }
+      }
+    }
+  }
+
+  // Keine Normalisierung nötig
+  return variant
+}
+
 export interface ShopifyCreateProductResponse {
   productCreate: {
     product: {
@@ -192,29 +234,44 @@ export function convertProductToShopify(
 
   // Wenn Varianten vorhanden sind, erstelle Product Options und Variants
   if (variants && variants.length > 0) {
+    // Normalisiere Varianten zuerst (trenne kombinierte Größe/Farbe Werte)
+    const normalizedVariants = variants.map(normalizeVariant)
+    
     // Gruppiere Varianten nach Typ (Größe, Farbe, etc.)
-    const sizeVariants = variants.filter((v) => !v.color_name)
-    const colorVariants = variants.filter((v) => v.color_name)
+    // WICHTIG: Eine Variante kann NICHT gleichzeitig Größe und Farbe sein
+    // Wenn eine Variante beide hat, wird sie als Kombination behandelt
+    const sizeVariants = normalizedVariants.filter((v) => v.name && !v.color_name)
+    const colorVariants = normalizedVariants.filter((v) => v.color_name && !v.name)
+    
+    // Varianten die bereits beide haben (sollten eigentlich nicht vorkommen nach Normalisierung)
+    // werden als separate Kombinationen behandelt
+    const combinedVariants = normalizedVariants.filter((v) => v.name && v.color_name)
 
     const productOptions: Array<{ name: string; values: Array<{ name: string }> }> = []
 
+    // Sammle alle eindeutigen Größen (auch aus combinedVariants)
+    const allSizes = new Set<string>()
+    sizeVariants.forEach((v) => allSizes.add(v.name))
+    combinedVariants.forEach((v) => allSizes.add(v.name))
+    
+    // Sammle alle eindeutigen Farben (auch aus combinedVariants)
+    const allColors = new Set<string>()
+    colorVariants.forEach((v) => v.color_name && allColors.add(v.color_name))
+    combinedVariants.forEach((v) => v.color_name && allColors.add(v.color_name))
+
     // Größen-Option hinzufügen
-    if (sizeVariants.length > 0) {
-      const uniqueSizes = Array.from(new Set(sizeVariants.map((v) => v.name)))
+    if (allSizes.size > 0) {
       productOptions.push({
         name: 'Größe',
-        values: uniqueSizes.map((size) => ({ name: size })),
+        values: Array.from(allSizes).map((size) => ({ name: size })),
       })
     }
 
     // Farb-Option hinzufügen
-    if (colorVariants.length > 0) {
-      const uniqueColors = Array.from(
-        new Set(colorVariants.map((v) => v.color_name).filter(Boolean))
-      )
+    if (allColors.size > 0) {
       productOptions.push({
         name: 'Farbe',
-        values: uniqueColors.map((color) => ({ name: color! })),
+        values: Array.from(allColors).map((color) => ({ name: color })),
       })
     }
 
@@ -225,23 +282,37 @@ export function convertProductToShopify(
     // Varianten erstellen - für jede Kombination aus Größe und Farbe
     const variantList: Array<{ price: string; sku?: string }> = []
     
-    if (sizeVariants.length > 0 && colorVariants.length > 0) {
-      // Kombinationen aus Größe und Farbe
-      sizeVariants.forEach((sizeVariant) => {
-        colorVariants.forEach((colorVariant) => {
+    // Wenn wir kombinierte Varianten haben, verwende diese direkt
+    if (combinedVariants.length > 0) {
+      combinedVariants.forEach((variant) => {
+        const variantPrice = (product.base_price + (variant.additional_price || 0)).toFixed(2)
+        variantList.push({
+          price: variantPrice,
+          sku: variant.sku || undefined,
+        })
+      })
+    } else if (allSizes.size > 0 && allColors.size > 0) {
+      // Kombinationen aus Größe und Farbe erstellen
+      // Verwende die ursprünglichen Varianten für Preise, aber kombiniere alle Größen mit allen Farben
+      Array.from(allSizes).forEach((size) => {
+        Array.from(allColors).forEach((color) => {
+          // Finde die ursprüngliche Variante für diese Größe und Farbe
+          const sizeVariant = normalizedVariants.find((v) => v.name === size && !v.color_name)
+          const colorVariant = normalizedVariants.find((v) => v.color_name === color && !v.name)
+          
           const variantPrice = (
             product.base_price +
-            (sizeVariant.additional_price || 0) +
-            (colorVariant.additional_price || 0)
+            (sizeVariant?.additional_price || 0) +
+            (colorVariant?.additional_price || 0)
           ).toFixed(2)
           
           variantList.push({
             price: variantPrice,
-            sku: sizeVariant.sku || colorVariant.sku || undefined,
+            sku: sizeVariant?.sku || colorVariant?.sku || undefined,
           })
         })
       })
-    } else if (sizeVariants.length > 0) {
+    } else if (allSizes.size > 0) {
       // Nur Größen
       sizeVariants.forEach((variant) => {
         const variantPrice = (product.base_price + (variant.additional_price || 0)).toFixed(2)
@@ -250,7 +321,7 @@ export function convertProductToShopify(
           sku: variant.sku || undefined,
         })
       })
-    } else if (colorVariants.length > 0) {
+    } else if (allColors.size > 0) {
       // Nur Farben
       colorVariants.forEach((variant) => {
         const variantPrice = (product.base_price + (variant.additional_price || 0)).toFixed(2)
@@ -261,7 +332,7 @@ export function convertProductToShopify(
       })
     } else {
       // Fallback: alle Varianten
-      variants.forEach((variant) => {
+      normalizedVariants.forEach((variant) => {
         const variantPrice = (product.base_price + (variant.additional_price || 0)).toFixed(2)
         variantList.push({
           price: variantPrice,
