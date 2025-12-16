@@ -20,6 +20,7 @@ import StoreIcon from '@mui/icons-material/Store'
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart'
 import PersonIcon from '@mui/icons-material/Person'
 import LogoutIcon from '@mui/icons-material/Logout'
+import SettingsIcon from '@mui/icons-material/Settings'
 import { useAuth } from './AuthProvider'
 
 export function AppBar() {
@@ -204,6 +205,19 @@ export function AppBar() {
                   {user?.email || 'Unbekannt'}
                 </Typography>
               </Box>
+              <Divider />
+              <MenuItem
+                onClick={() => {
+                  handleMenuClose()
+                  router.push('/admin/pricing')
+                }}
+                sx={{
+                  py: 1.5,
+                }}
+              >
+                <SettingsIcon sx={{ mr: 1.5, fontSize: 20 }} />
+                Preisverwaltung
+              </MenuItem>
               <Divider />
               <MenuItem
                 onClick={handleLogout}

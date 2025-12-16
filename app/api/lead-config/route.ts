@@ -136,7 +136,31 @@ export async function POST(request: NextRequest) {
     if (existing) {
       // Aktualisiere bestehende Konfiguration
       const updateData: any = {}
-      if (selected_textiles !== undefined) updateData.selected_textiles = selected_textiles
+      if (selected_textiles !== undefined) {
+        updateData.selected_textiles = selected_textiles
+        
+        // #region agent log
+        await fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: 'route.ts:139',
+            message: 'API: Updating selected_textiles',
+            data: {
+              selectedTextilesLength: Array.isArray(selected_textiles) ? selected_textiles.length : 'not array',
+              firstTextilePrintFiles: Array.isArray(selected_textiles) && selected_textiles[0] 
+                ? JSON.stringify(selected_textiles[0].print_files || {}).substring(0, 300)
+                : 'no first textile',
+              fullSelectedTextiles: JSON.stringify(selected_textiles).substring(0, 500),
+            },
+            timestamp: Date.now(),
+            sessionId: 'debug-session',
+            runId: 'run1',
+            hypothesisId: 'B',
+          }),
+        }).catch(() => {});
+        // #endregion
+      }
       if (print_positions !== undefined) updateData.print_positions = print_positions
       if (price_calculation !== undefined) updateData.price_calculation = price_calculation
       if (status !== undefined) updateData.status = status
@@ -149,6 +173,21 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (error) {
+        // #region agent log
+        await fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: 'route.ts:170',
+            message: 'API: Error updating',
+            data: { error: error.message, code: error.code },
+            timestamp: Date.now(),
+            sessionId: 'debug-session',
+            runId: 'run1',
+            hypothesisId: 'B',
+          }),
+        }).catch(() => {});
+        // #endregion
         console.error('Error updating lead config:', error)
         return NextResponse.json(
           { error: 'Fehler beim Aktualisieren der Konfiguration' },
@@ -156,6 +195,26 @@ export async function POST(request: NextRequest) {
         )
       }
 
+      // #region agent log
+      await fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: 'route.ts:185',
+          message: 'API: Updated successfully',
+          data: {
+            savedSelectedTextiles: JSON.stringify(data.selected_textiles).substring(0, 500),
+            firstTextilePrintFiles: Array.isArray(data.selected_textiles) && data.selected_textiles[0]
+              ? JSON.stringify(data.selected_textiles[0].print_files || {}).substring(0, 300)
+              : 'no first textile',
+          },
+          timestamp: Date.now(),
+          sessionId: 'debug-session',
+          runId: 'run1',
+          hypothesisId: 'B',
+        }),
+      }).catch(() => {});
+      // #endregion
       result = data
     } else {
       // Erstelle neue Konfiguration

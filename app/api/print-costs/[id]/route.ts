@@ -67,6 +67,8 @@ export async function PATCH(
     }
     if (body.cost_per_unit !== undefined) updateData.cost_per_unit = parseFloat(body.cost_per_unit)
     if (body.setup_fee !== undefined) updateData.setup_fee = parseFloat(body.setup_fee)
+    if (body.cost_50_units !== undefined) updateData.cost_50_units = body.cost_50_units ? parseFloat(body.cost_50_units) : null
+    if (body.cost_100_units !== undefined) updateData.cost_100_units = body.cost_100_units ? parseFloat(body.cost_100_units) : null
     if (body.active !== undefined) updateData.active = body.active
 
     const { data, error } = await supabaseAdmin

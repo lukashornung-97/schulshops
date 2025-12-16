@@ -86,11 +86,16 @@ export default function AdminUsersPage() {
       // For now, we'll just add the email and user_id will be null until they sign in
       
       // Check if email already exists
-      const { data: existingAdmin } = await supabase
+      const { data: existingAdmin, error: checkError } = await supabase
         .from('admin_users')
         .select('id')
         .eq('email', newEmail.toLowerCase())
-        .single()
+        .maybeSingle()
+
+      // Check for unexpected errors (not just "not found")
+      if (checkError && checkError.code !== 'PGRST116') {
+        throw checkError
+      }
 
       if (existingAdmin) {
         setSnackbar({

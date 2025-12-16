@@ -12,15 +12,12 @@ import {
   CircularProgress,
   Alert,
   Snackbar,
-  Grid,
-  Divider,
 } from '@mui/material'
 import { supabase } from '@/lib/supabase'
 import { Database } from '@/types/database'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SchoolIcon from '@mui/icons-material/School'
 import TextileSelector from './components/TextileSelector'
-import PrintDataEditor from './components/PrintDataEditor'
 import PreviewUploader from './components/PreviewUploader'
 import PriceCalculator from './components/PriceCalculator'
 
@@ -122,6 +119,30 @@ export default function LeadDashboardPage() {
     }
   }
 
+  // #region agent log
+  useEffect(() => {
+    const logData = {
+      location: 'app/schools/[id]/lead-dashboard/page.tsx:141',
+      message: 'LeadDashboard render - checking window width and grid setup',
+      data: {
+        windowWidth: typeof window !== 'undefined' ? window.innerWidth : 'server',
+        containerMaxWidth: 'xl',
+        gridItems: 4,
+        expectedLayout: '2x2 grid with 50% width each',
+      },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'A',
+    };
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logData),
+    }).catch(() => {});
+  }, []);
+  // #endregion
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
@@ -175,92 +196,71 @@ export default function LeadDashboardPage() {
           </Box>
         </Box>
 
-        {/* Layout: Vier Bereiche in zwei Zeilen, jeweils 50% Breite */}
-        <Grid container spacing={3}>
-          {/* Zeile 1: Textilauswahl + Druckdaten */}
-          <Grid item xs={12} sm={12} md={6} lg={6}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 2 }}>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                  1. Textilien auswählen
+        {/* Layout: Textilauswahl 100% Breite, dann 2x2 Grid */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
+          {/* Textilauswahl - 100% Breite */}
+          <Card sx={{ width: '100%' }}>
+            <CardContent sx={{ p: 3 }}>
+              <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
+                1. Textilien auswählen
+              </Typography>
+              <TextileSelector
+                schoolId={params.id as string}
+                config={config}
+                onSave={saveConfig}
+                onNext={() => {}}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Preiskalkulation + Druckvorschauen - 2x2 Grid */}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+              gap: 3,
+              width: '100%',
+            }}
+          >
+            <Card sx={{ height: '100%', width: '100%' }}>
+              <CardContent sx={{ p: 3 }}>
+                <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
+                  2. Preiskalkulation
                 </Typography>
-                <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
-                  <TextileSelector
-                    schoolId={params.id as string}
-                    config={config}
-                    onSave={saveConfig}
-                    onNext={() => {}}
-                  />
-                </Box>
+                <PriceCalculator
+                  schoolId={params.id as string}
+                  config={config}
+                  onSave={saveConfig}
+                  onNext={() => {}}
+                  onBack={() => {}}
+                />
               </CardContent>
             </Card>
-          </Grid>
 
-          <Grid item xs={12} sm={12} md={6} lg={6}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 2 }}>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                  2. Druckdaten
+            <Card sx={{ height: '100%', width: '100%' }}>
+              <CardContent sx={{ p: 3 }}>
+                <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
+                  3. Druckvorschauen
                 </Typography>
-                <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
-                  <PrintDataEditor
-                    schoolId={params.id as string}
-                    config={config}
-                    onSave={saveConfig}
-                    onNext={() => {}}
-                    onBack={() => {}}
-                  />
-                </Box>
+                <PreviewUploader
+                  schoolId={params.id as string}
+                  config={config}
+                  onSave={saveConfig}
+                  onNext={() => {}}
+                  onBack={() => {}}
+                  mode="previews"
+                />
               </CardContent>
             </Card>
-          </Grid>
+          </Box>
+        </Box>
 
-          {/* Zeile 2: Preiskalkulation + Druckvorschauen */}
-          <Grid item xs={12} sm={12} md={6} lg={6}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 2 }}>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                  3. Preiskalkulation
-                </Typography>
-                <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
-                  <PriceCalculator
-                    schoolId={params.id as string}
-                    config={config}
-                    onSave={saveConfig}
-                    onNext={() => {}}
-                    onBack={() => {}}
-                  />
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12} sm={12} md={6} lg={6}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: 2 }}>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                  4. Druckvorschauen
-                </Typography>
-                <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
-                  <PreviewUploader
-                    schoolId={params.id as string}
-                    config={config}
-                    onSave={saveConfig}
-                    onNext={() => {}}
-                    onBack={() => {}}
-                    mode="previews"
-                  />
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Zeile 3: Bestätigung (volle Breite) */}
-          <Grid item xs={12}>
+        {/* Zeile 3: Bestätigung (volle Breite) */}
+        <Box sx={{ mt: 3, width: '100%' }}>
             <Card>
               <CardContent>
                 <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                  5. Bestätigung
+                  4. Bestätigung
                 </Typography>
                 {config?.status === 'pending_approval' ? (
                   <Alert severity="warning" sx={{ mb: 2 }}>
@@ -307,8 +307,7 @@ export default function LeadDashboardPage() {
                 )}
               </CardContent>
             </Card>
-          </Grid>
-        </Grid>
+        </Box>
       </Container>
 
       {/* Snackbar */}

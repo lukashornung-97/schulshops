@@ -29,6 +29,11 @@ interface SelectedTextile {
   textile_name: string
   colors: string[]
   sizes: string[]
+  print_methods?: {
+    front?: { [color: string]: string }
+    back?: { [color: string]: string }
+    side?: { [color: string]: string }
+  }
 }
 
 interface PriceCalculation {
@@ -127,10 +132,51 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
         side: false,
       }
 
-      // Finde Druckkosten pro Position
-      const frontCost = printCosts.find(c => c.position === 'front' && c.active)?.cost_per_unit || 0
-      const backCost = printCosts.find(c => c.position === 'back' && c.active)?.cost_per_unit || 0
-      const sideCost = printCosts.find(c => c.position === 'side' && c.active)?.cost_per_unit || 0
+      const printMethods = textile.print_methods || {}
+      
+      // Berechne Kosten basierend auf Druckarten pro Position/Farbe
+      let frontCost = 0
+      let backCost = 0
+      let sideCost = 0
+
+      // Für jede Position: Summiere die Kosten für alle Farben mit gewählter Druckart
+      if (positions.front && printMethods.front) {
+        Object.values(printMethods.front).forEach(method => {
+          const cost = printCosts.find(c => c.name === method && c.position === 'front' && c.active)
+          if (cost) {
+            frontCost += cost.cost_per_unit
+          }
+        })
+      }
+
+      if (positions.back && printMethods.back) {
+        Object.values(printMethods.back).forEach(method => {
+          const cost = printCosts.find(c => c.name === method && c.position === 'back' && c.active)
+          if (cost) {
+            backCost += cost.cost_per_unit
+          }
+        })
+      }
+
+      if (positions.side && printMethods.side) {
+        Object.values(printMethods.side).forEach(method => {
+          const cost = printCosts.find(c => c.name === method && c.position === 'side' && c.active)
+          if (cost) {
+            sideCost += cost.cost_per_unit
+          }
+        })
+      }
+
+      // Fallback: Wenn keine Druckart gewählt, verwende Standard-Kosten
+      if (positions.front && frontCost === 0) {
+        frontCost = printCosts.find(c => c.position === 'front' && c.active)?.cost_per_unit || 0
+      }
+      if (positions.back && backCost === 0) {
+        backCost = printCosts.find(c => c.position === 'back' && c.active)?.cost_per_unit || 0
+      }
+      if (positions.side && sideCost === 0) {
+        sideCost = printCosts.find(c => c.position === 'side' && c.active)?.cost_per_unit || 0
+      }
 
       const printCostsByPosition = {
         front: positions.front ? frontCost : 0,

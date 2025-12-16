@@ -360,6 +360,8 @@ export interface Database {
           position: 'front' | 'back' | 'side'
           cost_per_unit: number
           setup_fee: number
+          cost_50_units: number | null
+          cost_100_units: number | null
           active: boolean
           created_at: string
           updated_at: string
@@ -370,6 +372,8 @@ export interface Database {
           position: 'front' | 'back' | 'side'
           cost_per_unit: number
           setup_fee?: number
+          cost_50_units?: number | null
+          cost_100_units?: number | null
           active?: boolean
           created_at?: string
           updated_at?: string
@@ -380,6 +384,83 @@ export interface Database {
           position?: 'front' | 'back' | 'side'
           cost_per_unit?: number
           setup_fee?: number
+          cost_50_units?: number | null
+          cost_100_units?: number | null
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      textile_prices: {
+        Row: {
+          id: string
+          textile_id: string
+          price: number
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          textile_id: string
+          price: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          textile_id?: string
+          price?: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      handling_costs: {
+        Row: {
+          id: string
+          cost_per_order: number
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          cost_per_order: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          cost_per_order?: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      print_methods: {
+        Row: {
+          id: string
+          name: string
+          display_order: number
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          display_order?: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          display_order?: number
           active?: boolean
           created_at?: string
           updated_at?: string

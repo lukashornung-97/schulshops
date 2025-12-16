@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createBrowserClient as createSupabaseBrowserClient } from '@supabase/ssr'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -28,9 +28,17 @@ export const supabaseAdmin = createClient(
   }
 )
 
+// Singleton pattern for browser client to avoid multiple instances
+let browserClient: ReturnType<typeof createSupabaseBrowserClient> | null = null
+
 // Browser client for client components (handles cookies automatically)
 export function createBrowserClient() {
-  return createClientComponentClient()
+  if (browserClient) {
+    return browserClient
+  }
+  
+  browserClient = createSupabaseBrowserClient(supabaseUrl, supabaseAnonKey)
+  return browserClient
 }
 
 // Check if a user is an admin (using admin client)
