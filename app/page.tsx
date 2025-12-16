@@ -298,7 +298,11 @@ export default function Home() {
             overflow: 'hidden',
             background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
           }}
-          onClick={() => router.push(`/schools/${school.id}`)}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            router.push(`/schools/${school.id}`)
+          }}
         >
           {/* Status indicator bar */}
           <Box
