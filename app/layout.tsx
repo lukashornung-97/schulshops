@@ -1,7 +1,9 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import { ThemeProvider } from '@/components/ThemeProvider'
-import { AppBar } from '@/components/AppBar'
+import { AuthProvider } from '@/components/AuthProvider'
+import { AppBarWrapper } from '@/components/AppBarWrapper'
+import { LayoutContent } from '@/components/LayoutContent'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -20,13 +22,14 @@ export default function RootLayout({
     <html lang="de">
       <body className={inter.className}>
         <ThemeProvider>
-          <AppBar />
-          <main style={{ paddingTop: '72px', minHeight: 'calc(100vh - 72px)' }}>
-            {children}
-          </main>
+          <AuthProvider>
+            <AppBarWrapper />
+            <LayoutContent>
+              {children}
+            </LayoutContent>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
   )
 }
-

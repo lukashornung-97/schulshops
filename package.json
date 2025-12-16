@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:shopify": "node scripts/test-shopify-auto.js"
+    "test:shopify": "node scripts/test-shopify-auto.js",
+    "import:textiles": "node scripts/import-textiles-from-csv.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -312,6 +312,114 @@ export interface Database {
           updated_at?: string
         }
       }
+      textile_catalog: {
+        Row: {
+          id: string
+          name: string
+          brand: string | null
+          article_number: string | null
+          base_price: number
+          available_colors: string[] | null
+          available_sizes: string[] | null
+          image_url: string | null
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          brand?: string | null
+          article_number?: string | null
+          base_price?: number
+          available_colors?: string[] | null
+          available_sizes?: string[] | null
+          image_url?: string | null
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          brand?: string | null
+          article_number?: string | null
+          base_price?: number
+          available_colors?: string[] | null
+          available_sizes?: string[] | null
+          image_url?: string | null
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      print_costs: {
+        Row: {
+          id: string
+          name: string
+          position: 'front' | 'back' | 'side'
+          cost_per_unit: number
+          setup_fee: number
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          position: 'front' | 'back' | 'side'
+          cost_per_unit: number
+          setup_fee?: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          position?: 'front' | 'back' | 'side'
+          cost_per_unit?: number
+          setup_fee?: number
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      lead_configurations: {
+        Row: {
+          id: string
+          school_id: string
+          shop_id: string | null
+          status: 'draft' | 'pending_approval' | 'approved' | 'rejected'
+          selected_textiles: Json
+          print_positions: Json
+          price_calculation: Json | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          school_id: string
+          shop_id?: string | null
+          status?: 'draft' | 'pending_approval' | 'approved' | 'rejected'
+          selected_textiles?: Json
+          print_positions?: Json
+          price_calculation?: Json | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          school_id?: string
+          shop_id?: string | null
+          status?: 'draft' | 'pending_approval' | 'approved' | 'rejected'
+          selected_textiles?: Json
+          print_positions?: Json
+          price_calculation?: Json | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
     }
   }
 }

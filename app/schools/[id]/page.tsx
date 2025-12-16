@@ -187,6 +187,13 @@ export default function SchoolDetail() {
         .single()
 
       if (error) throw error
+      
+      // Weiterleitung zum Lead-Dashboard wenn Status "lead" (case-insensitive)
+      if (data?.status?.toLowerCase() === 'lead') {
+        router.replace(`/schools/${params.id}/lead-dashboard`)
+        return
+      }
+      
       setSchool(data)
       setSchoolName(data?.name || '')
     } catch (error) {
