@@ -31,6 +31,7 @@ import {
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import SaveIcon from '@mui/icons-material/Save'
 import { Database } from '@/types/database'
 
 type TextileCatalog = Database['public']['Tables']['textile_catalog']['Row']
@@ -40,6 +41,9 @@ type TextilePrice = Database['public']['Tables']['textile_prices']['Row'] & {
 type PrintCost = Database['public']['Tables']['print_costs']['Row']
 type HandlingCost = Database['public']['Tables']['handling_costs']['Row']
 type PrintMethod = Database['public']['Tables']['print_methods']['Row']
+type PrintMethodCost = Database['public']['Tables']['print_method_costs']['Row'] & {
+  print_methods?: { id: string; name: string; display_order: number; active: boolean }
+}
 
 export default function PricingPage() {
   // #region agent log
@@ -51,6 +55,7 @@ export default function PricingPage() {
   const [textilePrices, setTextilePrices] = useState<TextilePrice[]>([])
   const [textiles, setTextiles] = useState<TextileCatalog[]>([])
   const [printCosts, setPrintCosts] = useState<PrintCost[]>([])
+  const [printMethodCosts, setPrintMethodCosts] = useState<PrintMethodCost[]>([])
   const [printMethods, setPrintMethods] = useState<PrintMethod[]>([])
   const [handlingCost, setHandlingCost] = useState<HandlingCost | null>(null)
   const [loading, setLoading] = useState(true)
@@ -138,6 +143,13 @@ export default function PricingPage() {
       // #endregion
       if (printMethodsResponse.ok) {
         setPrintMethods(printMethodsData.printMethods || [])
+      }
+
+      // Lade Druckarten-Preise
+      const printMethodCostsResponse = await fetch('/api/print-method-costs')
+      const printMethodCostsData = await printMethodCostsResponse.json()
+      if (printMethodCostsResponse.ok) {
+        setPrintMethodCosts(printMethodCostsData.printMethodCosts || [])
       }
 
       // Lade Handlingkosten
@@ -304,6 +316,81 @@ export default function PricingPage() {
       loadData()
     } catch (error: any) {
       setError(error.message || 'Fehler beim Löschen der Druckkosten')
+    }
+  }
+
+  async function handleSaveAllPrintMethodCosts(changes: Record<string, Record<string, number | null>>) {
+    const promises: Promise<void>[] = []
+
+    for (const [rowId, rowChanges] of Object.entries(changes)) {
+      const methodId = (rowChanges as any).methodId
+      const costId = (rowChanges as any).costId
+      const updateData: Record<string, number | null> = {}
+      
+      // Entferne methodId und costId aus updateData
+      Object.keys(rowChanges).forEach((key) => {
+        if (key !== 'methodId' && key !== 'costId') {
+          updateData[key] = rowChanges[key]
+        }
+      })
+
+      if (costId) {
+        // Update existing cost
+        promises.push(
+          fetch(`/api/print-method-costs/${costId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updateData),
+          }).then(async (response) => {
+            if (!response.ok) {
+              const error = await response.json()
+              throw new Error(error.error || 'Fehler beim Speichern')
+            }
+          })
+        )
+      } else if (methodId) {
+        // Create new cost
+        promises.push(
+          fetch('/api/print-method-costs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              print_method_id: methodId,
+              cost_per_unit: updateData.cost_per_unit ?? 0,
+              cost_50_units: updateData.cost_50_units ?? null,
+              cost_100_units: updateData.cost_100_units ?? null,
+            }),
+          }).then(async (response) => {
+            if (!response.ok) {
+              const error = await response.json()
+              throw new Error(error.error || 'Fehler beim Speichern')
+            }
+          })
+        )
+      }
+    }
+
+    await Promise.all(promises)
+    setSuccess('Alle Änderungen erfolgreich gespeichert')
+  }
+
+  async function handleDeletePrintMethodCost(id: string) {
+    if (!confirm('Möchten Sie diese Druckarten-Preise wirklich löschen?')) return
+
+    try {
+      const response = await fetch(`/api/print-method-costs/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Fehler beim Löschen')
+      }
+
+      setSuccess('Druckarten-Preise gelöscht')
+      loadData()
+    } catch (error: any) {
+      setError(error.message || 'Fehler beim Löschen der Druckarten-Preise')
     }
   }
 
@@ -554,11 +641,10 @@ export default function PricingPage() {
           </Box>
           <PrintMethodsPricingTable
             printMethods={printMethods}
-            printCosts={printCosts}
-            onSave={handleSavePrintCost}
-            onEdit={handleOpenPrintCostDialog}
-            onDelete={handleDeletePrintCost}
+            printMethodCosts={printMethodCosts}
+            onDelete={handleDeletePrintMethodCost}
             onReload={loadData}
+            onSaveAll={handleSaveAllPrintMethodCosts}
           />
         </CardContent>
       </Card>
@@ -670,319 +756,222 @@ export default function PricingPage() {
   )
 }
 
-// Bearbeitbare Tabelle für Druckarten und Staffelpreise
+type CostField = 'cost_per_unit' | 'cost_50_units' | 'cost_100_units'
+
 function PrintMethodsPricingTable({
   printMethods,
-  printCosts,
-  onSave,
-  onEdit,
+  printMethodCosts,
   onDelete,
   onReload,
+  onSaveAll,
 }: {
   printMethods: PrintMethod[]
-  printCosts: PrintCost[]
-  onSave: (formData: FormData) => void
-  onEdit: (cost: PrintCost) => void
+  printMethodCosts: PrintMethodCost[]
   onDelete: (id: string) => void
   onReload: () => void
+  onSaveAll: (changes: Record<string, Record<string, number | null>>) => Promise<void>
 }) {
-  // #region agent log
-  if (typeof window !== 'undefined') {
-    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pricing/page.tsx:674',message:'PrintMethodsPricingTable render',data:{printMethodsCount:printMethods?.length,printCostsCount:printCosts?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  }
-  // #endregion
-  
-  const [editingCell, setEditingCell] = useState<{ costId: string; field: string } | null>(null)
-  const [editValues, setEditValues] = useState<{ [key: string]: string }>({})
-  const [saving, setSaving] = useState<string | null>(null)
+  {// #region agent log
+  fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'pricing/page.tsx:680',message:'PrintMethodsPricingTable render',data:{printMethods:printMethods.length,printMethodCosts:printMethodCosts.length},sessionId:'debug-session',runId:'run1',hypothesisId:'A',timestamp:Date.now()})}).catch(()=>{});
+  }// #endregion
+  const [editValues, setEditValues] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
 
-  // Gruppiere Druckkosten nach Druckart (name) - Position wird ignoriert
-  const getCostForMethod = (methodName: string) => {
-    // Nimm die erste gefundene Position für diese Druckart
-    return printCosts.find(c => c.name === methodName)
-  }
+  useEffect(() => {
+    setEditValues({})
+  }, [printMethodCosts])
 
-  async function handleCellSave(costId: string, field: string, value: string) {
-    const cost = printCosts.find(c => c.id === costId)
-    if (!cost) return
+  const fieldConfigs: { key: CostField; label: string }[] = [
+    { key: 'cost_per_unit', label: 'Standard (€)' },
+    { key: 'cost_50_units', label: '50 Stück (€)' },
+    { key: 'cost_100_units', label: '100 Stück (€)' },
+  ]
 
-    // Prüfe ob sich der Wert geändert hat
-    let hasChanged = false
-    if (field === 'cost_per_unit') {
-      const newValue = parseFloat(value) || 0
-      hasChanged = cost.cost_per_unit !== newValue
-    } else if (field === 'cost_50_units') {
-      const newValue = value ? parseFloat(value) : null
-      hasChanged = cost.cost_50_units !== newValue
-    } else if (field === 'cost_100_units') {
-      const newValue = value ? parseFloat(value) : null
-      hasChanged = cost.cost_100_units !== newValue
+  const formatKey = (rowId: string, field: CostField) => `${rowId}_${field}`
+
+  const getFieldValue = (method: PrintMethod, cost: PrintMethodCost | undefined, field: CostField) => {
+    const rowId = cost?.id || method.id
+    const key = formatKey(rowId, field)
+    if (key in editValues) {
+      return editValues[key]
     }
 
-    // Wenn sich nichts geändert hat, einfach den Edit-Modus beenden
-    if (!hasChanged) {
-      setEditingCell(null)
-      setEditValues({})
+    if (!cost) {
+      return ''
+    }
+
+    const fieldValue = cost[field]
+    if (fieldValue === null || fieldValue === undefined) {
+      return ''
+    }
+
+    return fieldValue.toString()
+  }
+
+  const parseNumeric = (rawValue: string, defaultValue: number | null = null) => {
+    const normalized = rawValue.replace(',', '.').trim()
+    if (!normalized) {
+      return defaultValue
+    }
+    const parsed = parseFloat(normalized)
+    return Number.isNaN(parsed) ? defaultValue : parsed
+  }
+
+  const hasAnyChanges = () => {
+    return Object.keys(editValues).length > 0
+  }
+
+  const handleSaveAll = async () => {
+    if (!hasAnyChanges() || saving) {
       return
     }
 
-    setSaving(costId)
-    try {
-      const updateData: any = {}
-      if (field === 'cost_per_unit') {
-        updateData.cost_per_unit = parseFloat(value) || 0
-      } else if (field === 'cost_50_units') {
-        updateData.cost_50_units = value ? parseFloat(value) : null
-      } else if (field === 'cost_100_units') {
-        updateData.cost_100_units = value ? parseFloat(value) : null
-      }
+    const changes: Record<string, Record<string, number | null>> = {}
 
-      const response = await fetch(`/api/print-costs/${costId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData),
+    // Sammle alle Änderungen für alle Zeilen
+    printMethods
+      .filter((method) => method.active)
+      .forEach((method) => {
+        const cost = printMethodCosts.find((c) => c.print_method_id === method.id)
+        const rowId = cost?.id || method.id
+        const rowChanges: Record<string, number | null> = {}
+
+        fieldConfigs.forEach((field) => {
+          const key = formatKey(rowId, field.key)
+          if (key in editValues) {
+            const currentValue = editValues[key]
+            const numericValue = parseNumeric(currentValue, null)
+
+            if (cost) {
+              const existingValue = cost[field.key]
+              const isEqual =
+                (numericValue === null && existingValue === null) ||
+                numericValue === existingValue
+
+              if (!isEqual) {
+                rowChanges[field.key] = numericValue
+              }
+            } else {
+              // Für neue Zeilen können alle Felder gesetzt werden
+              if (numericValue !== null && !Number.isNaN(numericValue)) {
+                rowChanges[field.key] = numericValue
+              }
+            }
+          }
+        })
+
+        if (Object.keys(rowChanges).length > 0) {
+          changes[rowId] = {
+            ...rowChanges,
+            methodId: method.id,
+            costId: cost?.id,
+          } as any
+        }
       })
 
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Fehler beim Speichern')
-      }
+    if (Object.keys(changes).length === 0) {
+      return
+    }
 
-      setEditingCell(null)
+    try {
+      setSaving(true)
+      await onSaveAll(changes)
       setEditValues({})
       onReload()
     } catch (error: any) {
       alert(error.message || 'Fehler beim Speichern')
     } finally {
-      setSaving(null)
+      setSaving(false)
     }
   }
 
-  function handleCellEdit(costId: string, field: string, currentValue: number | null) {
-    setEditingCell({ costId, field })
-    setEditValues({ [`${costId}_${field}`]: currentValue?.toString() || '' })
-  }
-
-  function handleCellCancel() {
-    setEditingCell(null)
-    setEditValues({})
+  const handleInputChange = (rowId: string, field: CostField, value: string) => {
+    const key = formatKey(rowId, field)
+    setEditValues((prev) => ({ ...prev, [key]: value }))
   }
 
   return (
-    <TableContainer>
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableCell sx={{ fontWeight: 600 }}>Druckart</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 600 }}>Pro Stück (€)</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 600 }}>50 Stück (€)</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 600 }}>100 Stück (€)</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 600 }}>Aktionen</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {printMethods
-            .filter(m => m.active)
-            .sort((a, b) => a.display_order - b.display_order)
-            .map((method) => {
-              const cost = getCostForMethod(method.name)
-              const cellKey = cost ? cost.id : method.id
-              const isEditing = editingCell?.costId === cost?.id
+    <>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button
+          variant="contained"
+          startIcon={<SaveIcon />}
+          onClick={handleSaveAll}
+          disabled={!hasAnyChanges() || saving}
+          size="small"
+        >
+          {saving ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
+          Alle Änderungen speichern
+        </Button>
+      </Box>
+      <TableContainer>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 600 }}>Druckart</TableCell>
+              {fieldConfigs.map((field) => (
+                <TableCell key={field.key} align="right" sx={{ fontWeight: 600 }}>
+                  {field.label}
+                </TableCell>
+              ))}
+              <TableCell align="right" sx={{ fontWeight: 600 }}>
+                Aktionen
+              </TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {printMethods
+              .filter((method) => method.active)
+              .sort((a, b) => a.display_order - b.display_order)
+              .map((method) => {
+                const cost = printMethodCosts.find((c) => c.print_method_id === method.id)
+                const rowId = cost?.id || method.id
 
-              return (
-                <TableRow key={cellKey}>
-                  <TableCell>{method.name}</TableCell>
-                    <TableCell align="right">
-                      {cost ? (
-                        isEditing && editingCell?.field === 'cost_per_unit' ? (
+                return (
+                  <TableRow key={rowId}>
+                    <TableCell>{method.name}</TableCell>
+                    {fieldConfigs.map((field) => {
+                      const value = getFieldValue(method, cost, field.key)
+                      return (
+                        <TableCell key={field.key} align="right">
                           <TextField
                             type="number"
-                            value={editValues[`${cost.id}_cost_per_unit`] || cost.cost_per_unit.toString()}
-                            onChange={(e) =>
-                              setEditValues({ ...editValues, [`${cost.id}_cost_per_unit`]: e.target.value })
-                            }
-                            onBlur={(e) => {
-                              // Verzögere das Speichern, um sicherzustellen, dass andere Events zuerst verarbeitet werden
-                              setTimeout(() => {
-                                const value = editValues[`${cost.id}_cost_per_unit`] || cost.cost_per_unit.toString()
-                                handleCellSave(cost.id, 'cost_per_unit', value)
-                              }, 100)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const value = editValues[`${cost.id}_cost_per_unit`] || cost.cost_per_unit.toString()
-                                handleCellSave(cost.id, 'cost_per_unit', value)
-                              } else if (e.key === 'Escape') {
-                                handleCellCancel()
-                              }
-                            }}
+                            value={value}
+                            onChange={(e) => handleInputChange(rowId, field.key, e.target.value)}
                             size="small"
-                            inputProps={{ step: '0.01', min: '0', style: { textAlign: 'right', width: '80px' } }}
-                            autoFocus
+                            variant="standard"
+                            disabled={saving}
+                            inputProps={{
+                              step: '0.01',
+                              min: '0',
+                              style: { textAlign: 'right', width: '90px' },
+                            }}
+                            placeholder={!cost ? '–' : undefined}
+                            fullWidth
                           />
-                        ) : (
-                          <Box
-                            onClick={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              handleCellEdit(cost.id, 'cost_per_unit', cost.cost_per_unit)
-                            }}
-                            sx={{
-                              cursor: 'pointer',
-                              '&:hover': { backgroundColor: 'action.hover', borderRadius: 1, px: 1 },
-                              py: 0.5,
-                              display: 'inline-block',
-                            }}
-                          >
-                            {cost.cost_per_unit.toFixed(2)}
-                          </Box>
-                        )
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
+                        </TableCell>
+                      )
+                    })}
                     <TableCell align="right">
-                      {cost ? (
-                        isEditing && editingCell?.field === 'cost_50_units' ? (
-                          <TextField
-                            type="number"
-                            value={editValues[`${cost.id}_cost_50_units`] || (cost.cost_50_units?.toString() || '')}
-                            onChange={(e) =>
-                              setEditValues({ ...editValues, [`${cost.id}_cost_50_units`]: e.target.value })
-                            }
-                            onBlur={(e) => {
-                              // Verzögere das Speichern, um sicherzustellen, dass andere Events zuerst verarbeitet werden
-                              setTimeout(() => {
-                                const value = editValues[`${cost.id}_cost_50_units`] || (cost.cost_50_units?.toString() || '')
-                                handleCellSave(cost.id, 'cost_50_units', value)
-                              }, 100)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const value = editValues[`${cost.id}_cost_50_units`] || (cost.cost_50_units?.toString() || '')
-                                handleCellSave(cost.id, 'cost_50_units', value)
-                              } else if (e.key === 'Escape') {
-                                handleCellCancel()
-                              }
-                            }}
-                            size="small"
-                            inputProps={{ step: '0.01', min: '0', style: { textAlign: 'right', width: '80px' } }}
-                            autoFocus
-                          />
-                        ) : (
-                          <Box
-                            onClick={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              handleCellEdit(cost.id, 'cost_50_units', cost.cost_50_units)
-                            }}
-                            sx={{
-                              cursor: 'pointer',
-                              '&:hover': { backgroundColor: 'action.hover', borderRadius: 1, px: 1 },
-                              py: 0.5,
-                              display: 'inline-block',
-                            }}
-                          >
-                            {cost.cost_50_units ? cost.cost_50_units.toFixed(2) : '-'}
-                          </Box>
-                        )
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {cost ? (
-                        isEditing && editingCell?.field === 'cost_100_units' ? (
-                          <TextField
-                            type="number"
-                            value={editValues[`${cost.id}_cost_100_units`] || (cost.cost_100_units?.toString() || '')}
-                            onChange={(e) =>
-                              setEditValues({ ...editValues, [`${cost.id}_cost_100_units`]: e.target.value })
-                            }
-                            onBlur={(e) => {
-                              // Verzögere das Speichern, um sicherzustellen, dass andere Events zuerst verarbeitet werden
-                              setTimeout(() => {
-                                const value = editValues[`${cost.id}_cost_100_units`] || (cost.cost_100_units?.toString() || '')
-                                handleCellSave(cost.id, 'cost_100_units', value)
-                              }, 100)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const value = editValues[`${cost.id}_cost_100_units`] || (cost.cost_100_units?.toString() || '')
-                                handleCellSave(cost.id, 'cost_100_units', value)
-                              } else if (e.key === 'Escape') {
-                                handleCellCancel()
-                              }
-                            }}
-                            size="small"
-                            inputProps={{ step: '0.01', min: '0', style: { textAlign: 'right', width: '80px' } }}
-                            autoFocus
-                          />
-                        ) : (
-                          <Box
-                            onClick={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              handleCellEdit(cost.id, 'cost_100_units', cost.cost_100_units)
-                            }}
-                            sx={{
-                              cursor: 'pointer',
-                              '&:hover': { backgroundColor: 'action.hover', borderRadius: 1, px: 1 },
-                              py: 0.5,
-                              display: 'inline-block',
-                            }}
-                          >
-                            {cost.cost_100_units ? cost.cost_100_units.toFixed(2) : '-'}
-                          </Box>
-                        )
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {cost ? (
-                        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
-                          <IconButton
-                            size="small"
-                            onClick={() => onEdit(cost)}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              if (confirm('Möchten Sie diese Zeile wirklich löschen?')) {
-                                onDelete(cost.id)
-                              }
-                            }}
-                            color="error"
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Box>
-                      ) : (
-                        <Button
+                      {cost && (
+                        <IconButton
                           size="small"
-                          variant="outlined"
-                          onClick={() => {
-                            // Erstelle neue Zeile mit dieser Druckart (Position wird auf 'front' gesetzt als Standard)
-                            const formData = new FormData()
-                            formData.append('name', method.name)
-                            formData.append('position', 'front')
-                            formData.append('cost_per_unit', '0')
-                            onSave(formData)
-                          }}
+                          onClick={() => onDelete(cost.id)}
+                          color="error"
+                          disabled={saving}
+                          title="Löschen"
                         >
-                          Erstellen
-                        </Button>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
                       )}
                     </TableCell>
                   </TableRow>
                 )
-            })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+              })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </>
   )
 }
 

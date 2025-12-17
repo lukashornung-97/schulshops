@@ -36,6 +36,7 @@ import PrintIcon from '@mui/icons-material/Print'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import EditIcon from '@mui/icons-material/Edit'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import { Database } from '@/types/database'
 
 type TextileCatalog = Database['public']['Tables']['textile_catalog']['Row']
@@ -88,6 +89,9 @@ interface TextileSelectorProps {
 }
 
 export default function TextileSelector({ schoolId, config, onSave, onNext }: TextileSelectorProps) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TextileSelector.tsx:90',message:'TextileSelector component render START',data:{hasSchoolId:!!schoolId,hasConfig:!!config},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   const [textiles, setTextiles] = useState<TextileCatalog[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedTextiles, setSelectedTextiles] = useState<Map<string, SelectedTextile>>(new Map())
@@ -103,8 +107,14 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
   })
   const [printFiles, setPrintFiles] = useState<{ front?: { [color: string]: PrintFile[] }; back?: { [color: string]: PrintFile[] }; side?: { [color: string]: PrintFile[] } }>({})
   const [printMethods, setPrintMethods] = useState<{ front?: { [color: string]: string }; back?: { [color: string]: string }; side?: { [color: string]: string } }>({})
+  const [printMethodsList, setPrintMethodsList] = useState<string[]>([])
   const [previewImages, setPreviewImages] = useState<{ [color: string]: PreviewImage[] }>({})
   const [uploading, setUploading] = useState<string | null>(null)
+  const [fileBrowserOpen, setFileBrowserOpen] = useState(false)
+  const [fileBrowserPosition, setFileBrowserPosition] = useState<'front' | 'back' | 'side'>('front')
+  const [fileBrowserColor, setFileBrowserColor] = useState<string>('')
+  const [availableFiles, setAvailableFiles] = useState<PrintFile[]>([])
+  const [loadingFiles, setLoadingFiles] = useState(false)
 
   useEffect(() => {
     loadTextiles()
@@ -129,9 +139,18 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
       }
 
       const printMethodsData = await printMethodsResponse.json()
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TextileSelector.tsx:133',message:'loadTextiles printMethodsData received',data:{ok:printMethodsResponse.ok,hasData:!!printMethodsData,methodsCount:printMethodsData?.printMethods?.length||0,hasSetPrintMethodsList:typeof setPrintMethodsList!=='undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       if (printMethodsResponse.ok) {
         const methods = (printMethodsData.printMethods || []).map((m: { name: string }) => m.name)
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TextileSelector.tsx:135',message:'About to call setPrintMethodsList',data:{methodsLength:methods.length,methodsSample:methods.slice(0,3),setPrintMethodsListExists:typeof setPrintMethodsList!=='undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         setPrintMethodsList(methods)
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TextileSelector.tsx:137',message:'setPrintMethodsList called',data:{methodsLength:methods.length},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
       }
     } catch (error) {
       console.error('Error loading data:', error)
@@ -714,6 +733,63 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
     }
   }
 
+  async function handleOpenFileBrowser(position: 'front' | 'back' | 'side', color: string) {
+    if (!currentTextileId) return
+    
+    setFileBrowserPosition(position)
+    setFileBrowserColor(color)
+    setFileBrowserOpen(true)
+    setLoadingFiles(true)
+    
+    try {
+      // Lade nur Dateien für dieses Textil
+      const response = await fetch(`/api/storage/list-print-files?textile_id=${currentTextileId}`)
+      if (response.ok) {
+        const data = await response.json()
+        // Filtere auch nach Position und Farbe falls möglich
+        const filteredFiles = data.files
+          .filter((f: any) => {
+            // Dateipfad sollte lead-configs/{textileId}/{position}/{color}/ enthalten
+            const path = f.path || f.folder || ''
+            return path.includes(`lead-configs/${currentTextileId}/${position}/`)
+          })
+          .map((f: any) => ({
+            id: f.id,
+            url: f.url,
+            fileName: f.name,
+          }))
+        setAvailableFiles(filteredFiles)
+      }
+    } catch (error) {
+      console.error('Error loading files:', error)
+    } finally {
+      setLoadingFiles(false)
+    }
+  }
+
+  function handleSelectExistingFile(file: PrintFile) {
+    // Füge die ausgewählte Datei zu den Druckdateien hinzu
+    const updatedFiles = { ...printFiles }
+    if (!updatedFiles[fileBrowserPosition]) {
+      updatedFiles[fileBrowserPosition] = {}
+    }
+    if (!updatedFiles[fileBrowserPosition]![fileBrowserColor]) {
+      updatedFiles[fileBrowserPosition]![fileBrowserColor] = []
+    }
+    
+    // Prüfe ob Datei bereits hinzugefügt wurde
+    const exists = updatedFiles[fileBrowserPosition]![fileBrowserColor].some(f => f.url === file.url)
+    if (!exists) {
+      updatedFiles[fileBrowserPosition]![fileBrowserColor] = [
+        ...updatedFiles[fileBrowserPosition]![fileBrowserColor],
+        file,
+      ]
+      setPrintFiles(updatedFiles)
+    }
+    
+    setFileBrowserOpen(false)
+  }
+
   function handleAddTextile(textile: TextileCatalog | null) {
     if (!textile) return
     
@@ -1282,6 +1358,9 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
                                 </Typography>
                                 
                                 {/* Druckart-Dropdown */}
+                                {/* #region agent log */}
+                                {(()=>{try{fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TextileSelector.tsx:1305',message:'Autocomplete render - checking printMethodsList',data:{printMethodsListExists:typeof printMethodsList!=='undefined',printMethodsListLength:printMethodsList?.length||0,currentMethod,color,position},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});}catch(e){}return null;})()}
+                                {/* #endregion */}
                                 <Autocomplete
                                   options={printMethodsList}
                                   value={currentMethod}
@@ -1322,28 +1401,40 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
                                   </Box>
                                 )}
                                 
-                                {/* Upload-Button für diese Farbe */}
-                                <input
-                                  accept=".pdf,.ai,.eps,.psd"
-                                  style={{ display: 'none' }}
-                                  id={`print-file-${position}-${color}`}
-                                  type="file"
-                                  multiple
-                                  onChange={(e) => handleFileUpload(position, e.target.files, color)}
-                                  disabled={isUploading}
-                                />
-                                <label htmlFor={`print-file-${position}-${color}`}>
+                                {/* Upload-Button und Bibliothek-Button für diese Farbe */}
+                                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                  <input
+                                    accept=".pdf,.ai,.eps,.psd"
+                                    style={{ display: 'none' }}
+                                    id={`print-file-${position}-${color}`}
+                                    type="file"
+                                    multiple
+                                    onChange={(e) => handleFileUpload(position, e.target.files, color)}
+                                    disabled={isUploading}
+                                  />
+                                  <label htmlFor={`print-file-${position}-${color}`} style={{ flex: 1 }}>
+                                    <Button
+                                      variant="outlined"
+                                      component="span"
+                                      fullWidth
+                                      size="small"
+                                      startIcon={isUploading ? <CircularProgress size={14} /> : <CloudUploadIcon sx={{ fontSize: 16 }} />}
+                                      disabled={isUploading}
+                                      sx={{ fontSize: '0.7rem', px: 1 }}
+                                    >
+                                      {isUploading ? '...' : 'Upload'}
+                                    </Button>
+                                  </label>
                                   <Button
                                     variant="outlined"
-                                    component="span"
-                                    fullWidth
                                     size="small"
-                                    startIcon={isUploading ? <CircularProgress size={14} /> : <CloudUploadIcon sx={{ fontSize: 18 }} />}
-                                    disabled={isUploading}
+                                    onClick={() => handleOpenFileBrowser(position, color)}
+                                    sx={{ minWidth: 'auto', px: 1 }}
+                                    title="Aus Bibliothek wählen"
                                   >
-                                    {isUploading ? 'Wird hochgeladen...' : 'Datei hochladen'}
+                                    <FolderOpenIcon sx={{ fontSize: 16 }} />
                                   </Button>
-                                </label>
+                                </Box>
                               </Box>
                             )
                           })}
@@ -1456,6 +1547,67 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
           >
             Speichern
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Dialog für Datei-Bibliothek */}
+      <Dialog
+        open={fileBrowserOpen}
+        onClose={() => setFileBrowserOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Druckdatei aus Bibliothek wählen
+          <Typography variant="body2" color="text.secondary">
+            Position: {fileBrowserPosition === 'front' ? 'Vorne' : fileBrowserPosition === 'back' ? 'Hinten' : 'Seite'} | Farbe: {fileBrowserColor}
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          {loadingFiles ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : availableFiles.length === 0 ? (
+            <Alert severity="info">
+              Keine Druckdateien in der Bibliothek gefunden. Bitte laden Sie zuerst Dateien hoch.
+            </Alert>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 2 }}>
+              {availableFiles.map((file) => (
+                <Paper
+                  key={file.id}
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    '&:hover': {
+                      backgroundColor: 'action.hover',
+                    },
+                  }}
+                  onClick={() => handleSelectExistingFile(file)}
+                >
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>
+                      {file.fileName}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {file.url.length > 60 ? '...' + file.url.slice(-60) : file.url}
+                    </Typography>
+                  </Box>
+                  <Button variant="outlined" size="small">
+                    Auswählen
+                  </Button>
+                </Paper>
+              ))}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFileBrowserOpen(false)}>Abbrechen</Button>
         </DialogActions>
       </Dialog>
     </Box>

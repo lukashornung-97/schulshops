@@ -116,6 +116,8 @@ export async function PATCH(
     if (body.price_calculation !== undefined) updateData.price_calculation = body.price_calculation
     if (body.status !== undefined) updateData.status = body.status
     if (body.shop_id !== undefined) updateData.shop_id = body.shop_id
+    if (body.sponsoring !== undefined) updateData.sponsoring = body.sponsoring
+    if (body.margin !== undefined) updateData.margin = body.margin
 
     const { data, error } = await supabaseAdmin
       .from('lead_configurations')

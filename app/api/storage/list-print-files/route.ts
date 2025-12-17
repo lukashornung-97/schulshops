@@ -1,126 +1,201 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
+interface StorageFile {
+  name: string
+  id: string
+  updated_at: string
+  created_at: string
+  last_accessed_at: string
+  metadata: any
+}
+
+interface PrintFileInfo {
+  id: string
+  name: string
+  url: string
+  path: string
+  size?: number
+  mimeType?: string
+  createdAt: string
+  folder: string
+}
+
 /**
- * API Route zum Auflisten aller Druckdateien aus der product_images Tabelle
- * GET /api/storage/list-print-files?search=[search-term]&shop_id=[shop-id]
- * 
- * Gibt eine Liste aller eindeutigen Druckdateien zurück, die bereits in der Datenbank verwendet werden,
- * optional gefiltert nach Suchbegriff und Shop
+ * GET /api/storage/list-print-files
+ * Listet alle Druckdateien aus dem print-files Bucket
+ * Optional: ?folder=lead-configs/{textileId} um nach Ordner zu filtern
  */
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams
-    const searchTerm = searchParams.get('search')?.toLowerCase() || ''
-    const shopId = searchParams.get('shop_id')
+    const { searchParams } = new URL(request.url)
+    const folder = searchParams.get('folder') || ''
+    const textileId = searchParams.get('textile_id')
 
-    // Lade alle Druckdateien aus der product_images Tabelle
-    let query = supabaseAdmin
-      .from('product_images')
-      .select(`
-        print_file_url,
-        product_id,
-        products!inner (
-          id,
-          name,
-          shop_id,
-          shops (
-            id,
-            name,
-            slug
-          )
-        )
-      `)
-      .not('print_file_url', 'is', null)
+    // Wenn textile_id angegeben, filtere auf diesen Pfad
+    const searchFolder = textileId ? `lead-configs/${textileId}` : folder
 
-    // Optional: Filter nach Shop
-    if (shopId) {
-      query = query.eq('products.shop_id', shopId)
-    }
-
-    const { data: productImages, error } = await query
+    // Liste alle Dateien im print-files Bucket
+    const { data: files, error } = await supabaseAdmin.storage
+      .from('print-files')
+      .list(searchFolder, {
+        limit: 1000,
+        sortBy: { column: 'created_at', order: 'desc' },
+      })
 
     if (error) {
       console.error('Error listing print files:', error)
       return NextResponse.json(
-        { error: 'Fehler beim Auflisten der Druckdateien' },
+        { error: 'Fehler beim Laden der Druckdateien' },
         { status: 500 }
       )
     }
 
-    if (!productImages || productImages.length === 0) {
-      return NextResponse.json({ files: [] })
+    // Filtere Ordner aus und erstelle vollständige URLs
+    const printFiles: PrintFileInfo[] = []
+    
+    for (const file of files || []) {
+      // Überspringe Ordner (Placeholder-Dateien)
+      if (file.name === '.emptyFolderPlaceholder' || !file.id) {
+        continue
+      }
+
+      const filePath = searchFolder ? `${searchFolder}/${file.name}` : file.name
+      
+      // Erstelle öffentliche URL
+      const { data: urlData } = supabaseAdmin.storage
+        .from('print-files')
+        .getPublicUrl(filePath)
+
+      printFiles.push({
+        id: file.id,
+        name: file.name,
+        url: urlData.publicUrl,
+        path: filePath,
+        size: file.metadata?.size,
+        mimeType: file.metadata?.mimetype,
+        createdAt: file.created_at,
+        folder: folder,
+      })
     }
 
-    // Extrahiere eindeutige Druckdateien mit Metadaten
-    const printFilesMap = new Map<string, {
-      name: string
-      url: string
-      usedBy: Array<{
-        productName: string
-        productId: string
-        shopName: string
-        color: string
-        type: string
-      }>
-    }>()
-
-    productImages.forEach((img: any) => {
-      if (!img.print_file_url) return
-
-      // Extrahiere Dateinamen aus URL
-      const urlParts = img.print_file_url.split('/')
-      const fileName = urlParts[urlParts.length - 1] || ''
+    // Wenn textile_id angegeben, durchsuche rekursiv alle Positionen und Farben
+    if (textileId) {
+      const textilePath = `lead-configs/${textileId}`
       
-      // Filtere nach Suchbegriff
-      if (searchTerm && !fileName.toLowerCase().includes(searchTerm)) {
-        return
+      // Lade Positionen (front, back, side)
+      for (const position of ['front', 'back', 'side']) {
+        const positionPath = `${textilePath}/${position}`
+        
+        const { data: positionFiles } = await supabaseAdmin.storage
+          .from('print-files')
+          .list(positionPath, { limit: 100 })
+
+        if (positionFiles) {
+          // Für jeden Farb-Ordner
+          for (const colorFolder of positionFiles) {
+            if (colorFolder.name === '.emptyFolderPlaceholder') continue
+            
+            const colorPath = `${positionPath}/${colorFolder.name}`
+            
+            const { data: colorFiles } = await supabaseAdmin.storage
+              .from('print-files')
+              .list(colorPath, { limit: 100 })
+
+            if (colorFiles) {
+              for (const file of colorFiles) {
+                if (file.name === '.emptyFolderPlaceholder' || !file.id) continue
+                
+                const filePath = `${colorPath}/${file.name}`
+                const { data: urlData } = supabaseAdmin.storage
+                  .from('print-files')
+                  .getPublicUrl(filePath)
+
+                printFiles.push({
+                  id: file.id,
+                  name: file.name,
+                  url: urlData.publicUrl,
+                  path: filePath,
+                  size: file.metadata?.size,
+                  mimeType: file.metadata?.mimetype,
+                  createdAt: file.created_at,
+                  folder: colorPath,
+                })
+              }
+            }
+          }
+        }
       }
+    } else if (!folder) {
+      // Wenn kein Ordner angegeben und keine textile_id, durchsuche auch Unterordner (lead-configs)
+      // Lade lead-configs Ordner
+      const { data: leadConfigFolders, error: foldersError } = await supabaseAdmin.storage
+        .from('print-files')
+        .list('lead-configs', { limit: 100 })
 
-      // Nur PDF-Dateien
-      if (!fileName.toLowerCase().endsWith('.pdf')) {
-        return
+      if (!foldersError && leadConfigFolders) {
+        // Für jeden Textil-Ordner
+        for (const textileFolder of leadConfigFolders) {
+          if (textileFolder.name === '.emptyFolderPlaceholder') continue
+          
+          const textilePath = `lead-configs/${textileFolder.name}`
+          
+          // Lade Positionen (front, back, side)
+          for (const position of ['front', 'back', 'side']) {
+            const positionPath = `${textilePath}/${position}`
+            
+            const { data: positionFiles } = await supabaseAdmin.storage
+              .from('print-files')
+              .list(positionPath, { limit: 100 })
+
+            if (positionFiles) {
+              // Für jeden Farb-Ordner
+              for (const colorFolder of positionFiles) {
+                if (colorFolder.name === '.emptyFolderPlaceholder') continue
+                
+                const colorPath = `${positionPath}/${colorFolder.name}`
+                
+                const { data: colorFiles } = await supabaseAdmin.storage
+                  .from('print-files')
+                  .list(colorPath, { limit: 100 })
+
+                if (colorFiles) {
+                  for (const file of colorFiles) {
+                    if (file.name === '.emptyFolderPlaceholder' || !file.id) continue
+                    
+                    const filePath = `${colorPath}/${file.name}`
+                    const { data: urlData } = supabaseAdmin.storage
+                      .from('print-files')
+                      .getPublicUrl(filePath)
+
+                    printFiles.push({
+                      id: file.id,
+                      name: file.name,
+                      url: urlData.publicUrl,
+                      path: filePath,
+                      size: file.metadata?.size,
+                      mimeType: file.metadata?.mimetype,
+                      createdAt: file.created_at,
+                      folder: colorPath,
+                    })
+                  }
+                }
+              }
+            }
+          }
+        }
       }
+    }
 
-      const product = img.products
-      const shop = product?.shops
-
-      if (!printFilesMap.has(fileName)) {
-        printFilesMap.set(fileName, {
-          name: fileName,
-          url: img.print_file_url,
-          usedBy: []
-        })
-      }
-
-      const fileEntry = printFilesMap.get(fileName)!
-      fileEntry.usedBy.push({
-        productName: product?.name || 'Unbekannt',
-        productId: product?.id || '',
-        shopName: shop?.name || shop?.slug || 'Unbekannt',
-        color: img.textile_color_name || 'Unbekannt',
-        type: img.image_type || 'Unbekannt'
-      })
+    return NextResponse.json({ 
+      files: printFiles,
+      count: printFiles.length,
     })
-
-    // Konvertiere Map zu Array und sortiere
-    const files = Array.from(printFilesMap.values())
-      .map(file => ({
-        name: file.name,
-        path: file.url,
-        url: file.url,
-        usedBy: file.usedBy,
-        usedCount: file.usedBy.length
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-
-    return NextResponse.json({ files })
   } catch (error: any) {
-    console.error('Error in list-print-files:', error)
+    console.error('Error in GET /api/storage/list-print-files:', error)
     return NextResponse.json(
-      { error: error.message || 'Fehler beim Auflisten der Druckdateien' },
+      { error: error.message || 'Unerwarteter Fehler' },
       { status: 500 }
     )
   }
 }
-

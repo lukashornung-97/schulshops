@@ -94,6 +94,8 @@ export async function POST(request: NextRequest) {
       print_positions,
       price_calculation,
       status = 'draft',
+      sponsoring,
+      margin,
     } = body
 
     if (!school_id) {
@@ -164,6 +166,8 @@ export async function POST(request: NextRequest) {
       if (print_positions !== undefined) updateData.print_positions = print_positions
       if (price_calculation !== undefined) updateData.price_calculation = price_calculation
       if (status !== undefined) updateData.status = status
+      if (sponsoring !== undefined) updateData.sponsoring = sponsoring
+      if (margin !== undefined) updateData.margin = margin
 
       const { data, error } = await supabaseAdmin
         .from('lead_configurations')
@@ -226,6 +230,8 @@ export async function POST(request: NextRequest) {
           print_positions: print_positions || {},
           price_calculation: price_calculation || null,
           status,
+          sponsoring: sponsoring || null,
+          margin: margin || 0,
         })
         .select()
         .single()

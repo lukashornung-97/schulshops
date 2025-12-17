@@ -18,7 +18,6 @@ import { Database } from '@/types/database'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SchoolIcon from '@mui/icons-material/School'
 import TextileSelector from './components/TextileSelector'
-import PreviewUploader from './components/PreviewUploader'
 import PriceCalculator from './components/PriceCalculator'
 
 type School = Database['public']['Tables']['schools']['Row']
@@ -213,46 +212,21 @@ export default function LeadDashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Preiskalkulation + Druckvorschauen - 2x2 Grid */}
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
-              gap: 3,
-              width: '100%',
-            }}
-          >
-            <Card sx={{ height: '100%', width: '100%' }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
-                  2. Preiskalkulation
-                </Typography>
-                <PriceCalculator
-                  schoolId={params.id as string}
-                  config={config}
-                  onSave={saveConfig}
-                  onNext={() => {}}
-                  onBack={() => {}}
-                />
-              </CardContent>
-            </Card>
-
-            <Card sx={{ height: '100%', width: '100%' }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
-                  3. Druckvorschauen
-                </Typography>
-                <PreviewUploader
-                  schoolId={params.id as string}
-                  config={config}
-                  onSave={saveConfig}
-                  onNext={() => {}}
-                  onBack={() => {}}
-                  mode="previews"
-                />
-              </CardContent>
-            </Card>
-          </Box>
+          {/* Preiskalkulation - volle Breite */}
+          <Card sx={{ width: '100%' }}>
+            <CardContent sx={{ p: 3 }}>
+              <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
+                2. Preiskalkulation
+              </Typography>
+              <PriceCalculator
+                schoolId={params.id as string}
+                config={config}
+                onSave={saveConfig}
+                onNext={() => {}}
+                onBack={() => {}}
+              />
+            </CardContent>
+          </Card>
         </Box>
 
         {/* Zeile 3: Bestätigung (volle Breite) */}

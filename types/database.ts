@@ -466,6 +466,38 @@ export interface Database {
           updated_at?: string
         }
       }
+      print_method_costs: {
+        Row: {
+          id: string
+          print_method_id: string
+          cost_per_unit: number
+          cost_50_units: number | null
+          cost_100_units: number | null
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          print_method_id: string
+          cost_per_unit: number
+          cost_50_units?: number | null
+          cost_100_units?: number | null
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          print_method_id?: string
+          cost_per_unit?: number
+          cost_50_units?: number | null
+          cost_100_units?: number | null
+          active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
       lead_configurations: {
         Row: {
           id: string

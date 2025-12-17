@@ -3,8 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentAdmin } from '@/lib/supabase-server'
 
 /**
- * GET /api/print-costs/[id]
- * Lädt einzelne Druckkosten
+ * GET /api/print-method-costs/[id]
+ * Lädt einzelne Druckarten-Preise
  */
 export async function GET(
   request: NextRequest,
@@ -13,22 +13,30 @@ export async function GET(
   try {
     const resolvedParams = await Promise.resolve(params)
     const { data, error } = await supabaseAdmin
-      .from('print_costs')
-      .select('*')
+      .from('print_method_costs')
+      .select(`
+        *,
+        print_methods (
+          id,
+          name,
+          display_order,
+          active
+        )
+      `)
       .eq('id', resolvedParams.id)
       .single()
 
     if (error) {
-      console.error('Error fetching print cost:', error)
+      console.error('Error fetching print method cost:', error)
       return NextResponse.json(
-        { error: 'Druckkosten nicht gefunden' },
+        { error: 'Druckarten-Preis nicht gefunden' },
         { status: 404 }
       )
     }
 
-    return NextResponse.json({ printCost: data })
+    return NextResponse.json({ printMethodCost: data })
   } catch (error: any) {
-    console.error('Error in GET /api/print-costs/[id]:', error)
+    console.error('Error in GET /api/print-method-costs/[id]:', error)
     return NextResponse.json(
       { error: error.message || 'Unerwarteter Fehler' },
       { status: 500 }
@@ -37,8 +45,8 @@ export async function GET(
 }
 
 /**
- * PATCH /api/print-costs/[id]
- * Aktualisiert Druckkosten (nur für Admins)
+ * PATCH /api/print-method-costs/[id]
+ * Aktualisiert Druckarten-Preise (nur für Admins)
  */
 export async function PATCH(
   request: NextRequest,
@@ -56,24 +64,9 @@ export async function PATCH(
     const resolvedParams = await Promise.resolve(params)
     const body = await request.json()
     const updateData: any = {}
-    
-    // #region agent log
-    console.log('PATCH /api/print-costs/[id]', {
-      id: resolvedParams.id,
-      body,
-      bodyKeys: Object.keys(body),
-    })
-    // #endregion
 
-    if (body.name !== undefined) updateData.name = body.name
-    if (body.position !== undefined) {
-      if (!['front', 'back', 'side'].includes(body.position)) {
-        return NextResponse.json(
-          { error: 'Position muss front, back oder side sein' },
-          { status: 400 }
-        )
-      }
-      updateData.position = body.position
+    if (body.print_method_id !== undefined) {
+      updateData.print_method_id = body.print_method_id
     }
     if (body.cost_per_unit !== undefined) {
       const parsed = parseFloat(body.cost_per_unit)
@@ -84,16 +77,6 @@ export async function PATCH(
         )
       }
       updateData.cost_per_unit = parsed
-    }
-    if (body.setup_fee !== undefined) {
-      const parsed = parseFloat(body.setup_fee)
-      if (Number.isNaN(parsed)) {
-        return NextResponse.json(
-          { error: 'Einrichtungsgebühr muss eine gültige Zahl sein' },
-          { status: 400 }
-        )
-      }
-      updateData.setup_fee = parsed
     }
     if (body.cost_50_units !== undefined) {
       if (body.cost_50_units === null || body.cost_50_units === '') {
@@ -125,14 +108,6 @@ export async function PATCH(
     }
     if (body.active !== undefined) updateData.active = body.active
 
-    // #region agent log
-    console.log('Update data before Supabase call:', {
-      updateData,
-      updateDataKeys: Object.keys(updateData),
-      id: resolvedParams.id,
-    })
-    // #endregion
-
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json(
         { error: 'Keine Felder zum Aktualisieren' },
@@ -141,31 +116,31 @@ export async function PATCH(
     }
 
     const { data, error } = await supabaseAdmin
-      .from('print_costs')
+      .from('print_method_costs')
       .update(updateData)
       .eq('id', resolvedParams.id)
-      .select()
+      .select(`
+        *,
+        print_methods (
+          id,
+          name,
+          display_order,
+          active
+        )
+      `)
       .single()
 
     if (error) {
-      console.error('Error updating print cost:', error)
-      // #region agent log
-      console.error('Supabase error details:', {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      })
-      // #endregion
+      console.error('Error updating print method cost:', error)
       return NextResponse.json(
-        { error: error.message || 'Fehler beim Aktualisieren der Druckkosten' },
+        { error: error.message || 'Fehler beim Aktualisieren der Druckarten-Preise' },
         { status: 500 }
       )
     }
 
-    return NextResponse.json({ printCost: data })
+    return NextResponse.json({ printMethodCost: data })
   } catch (error: any) {
-    console.error('Error in PATCH /api/print-costs/[id]:', error)
+    console.error('Error in PATCH /api/print-method-costs/[id]:', error)
     return NextResponse.json(
       { error: error.message || 'Unerwarteter Fehler' },
       { status: 500 }
@@ -174,8 +149,8 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/print-costs/[id]
- * Löscht Druckkosten (nur für Admins)
+ * DELETE /api/print-method-costs/[id]
+ * Löscht Druckarten-Preise (nur für Admins)
  */
 export async function DELETE(
   request: NextRequest,
@@ -192,21 +167,21 @@ export async function DELETE(
 
     const resolvedParams = await Promise.resolve(params)
     const { error } = await supabaseAdmin
-      .from('print_costs')
+      .from('print_method_costs')
       .delete()
       .eq('id', resolvedParams.id)
 
     if (error) {
-      console.error('Error deleting print cost:', error)
+      console.error('Error deleting print method cost:', error)
       return NextResponse.json(
-        { error: 'Fehler beim Löschen der Druckkosten' },
+        { error: 'Fehler beim Löschen der Druckarten-Preise' },
         { status: 500 }
       )
     }
 
     return NextResponse.json({ success: true })
   } catch (error: any) {
-    console.error('Error in DELETE /api/print-costs/[id]:', error)
+    console.error('Error in DELETE /api/print-method-costs/[id]:', error)
     return NextResponse.json(
       { error: error.message || 'Unerwarteter Fehler' },
       { status: 500 }
