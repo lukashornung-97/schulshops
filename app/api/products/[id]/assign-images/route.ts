@@ -52,9 +52,10 @@ function normalizeForFile(value: string | null | undefined, fallback = 'x'): str
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const resolvedParams = await Promise.resolve(params)
     const body = await request.json()
     const { image_id, textile_colors } = body
 
@@ -77,7 +78,7 @@ export async function POST(
       .from('product_images')
       .select('*')
       .eq('id', image_id)
-      .eq('product_id', params.id)
+      .eq('product_id', resolvedParams.id)
       .single()
 
     if (imageError || !imageEntry) {
@@ -91,7 +92,7 @@ export async function POST(
     const { data: product, error: productError } = await supabaseAdmin
       .from('products')
       .select('id, name, shop_id')
-      .eq('id', params.id)
+      .eq('id', resolvedParams.id)
       .single()
 
     if (productError || !product) {
@@ -148,7 +149,7 @@ export async function POST(
       const { data: existing } = await supabaseAdmin
         .from('product_images')
         .select('id')
-        .eq('product_id', params.id)
+        .eq('product_id', resolvedParams.id)
         .eq('textile_color_name', color)
         .eq('image_type', imageEntry.image_type)
         .single()
@@ -231,7 +232,7 @@ export async function POST(
       } else {
         // Erstelle neuen Eintrag für diese Farbe
         const newEntry: any = {
-          product_id: params.id,
+          product_id: resolvedParams.id,
           textile_color_name: color,
           image_type: imageEntry.image_type,
         }
@@ -249,7 +250,7 @@ export async function POST(
         const { data: existingVariant } = await supabaseAdmin
           .from('product_variants')
           .select('id')
-          .eq('product_id', params.id)
+          .eq('product_id', resolvedParams.id)
           .eq('color_name', color)
           .maybeSingle()
 
@@ -260,7 +261,7 @@ export async function POST(
           const { data: newVariant, error: variantError } = await supabaseAdmin
             .from('product_variants')
             .insert([{
-              product_id: params.id,
+              product_id: resolvedParams.id,
               name: '', // Keine Größe, nur Farbe
               color_name: color,
               active: true,

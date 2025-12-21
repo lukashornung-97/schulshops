@@ -4,9 +4,6 @@ import { useState, useEffect } from 'react'
 import {
   Box,
   Typography,
-  Grid,
-  Card,
-  CardContent,
   Button,
   CircularProgress,
   Alert,
@@ -22,62 +19,15 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  IconButton,
 } from '@mui/material'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { Database } from '@/types/database'
 
 type LeadConfig = Database['public']['Tables']['lead_configurations']['Row']
-type PrintCost = Database['public']['Tables']['print_costs']['Row']
-type PrintMethodCost = Database['public']['Tables']['print_method_costs']['Row'] & {
-  print_methods?: { id: string; name: string; display_order: number; active: boolean }
-}
-type PrintMethod = Database['public']['Tables']['print_methods']['Row']
-type TextileCatalog = Database['public']['Tables']['textile_catalog']['Row']
-type TextilePrice = Database['public']['Tables']['textile_prices']['Row']
-type HandlingCost = Database['public']['Tables']['handling_costs']['Row']
-
-interface PrintFile {
-  id: string
-  url: string
-  fileName: string
-}
-
-interface SelectedTextile {
-  textile_id: string
-  textile_name: string
-  colors: string[]
-  sizes: string[]
-  print_positions?: {
-    front: boolean
-    back: boolean
-    side: boolean
-  }
-  print_files?: {
-    front?: { [color: string]: PrintFile[] }
-    back?: { [color: string]: PrintFile[] }
-    side?: { [color: string]: PrintFile[] }
-  }
-  print_methods?: {
-    front?: { [color: string]: string }
-    back?: { [color: string]: string }
-    side?: { [color: string]: string }
-  }
-}
-
-interface PriceCalculation {
-  [textileId: string]: {
-    textile_name: string
-    base_price: number
-    print_costs: {
-      front: number
-      back: number
-      side: number
-    }
-    total_print_cost: number
-    handling_cost: number
-    final_price: number
-    ek_netto: number
-    vk_brutto: number
-  }
+type Product = Database['public']['Tables']['products']['Row'] & {
+  textile_catalog?: Database['public']['Tables']['textile_catalog']['Row']
+  product_variants?: Array<{ id: string; name: string; color_name: string | null }>
 }
 
 interface PriceCalculatorProps {
@@ -89,134 +39,72 @@ interface PriceCalculatorProps {
 }
 
 export default function PriceCalculator({ schoolId, config, onSave, onNext, onBack }: PriceCalculatorProps) {
-  const [selectedTextiles, setSelectedTextiles] = useState<SelectedTextile[]>([])
-  const [printPositions, setPrintPositions] = useState<any>({})
-  const [printCosts, setPrintCosts] = useState<PrintCost[]>([])
-  const [printMethodCosts, setPrintMethodCosts] = useState<PrintMethodCost[]>([])
-  const [printMethods, setPrintMethods] = useState<Map<string, PrintMethod>>(new Map())
-  const [textiles, setTextiles] = useState<Map<string, TextileCatalog>>(new Map())
-  const [textilePrices, setTextilePrices] = useState<Map<string, TextilePrice>>(new Map())
-  const [handlingCost, setHandlingCost] = useState<HandlingCost | null>(null)
-  const [priceCalculation, setPriceCalculation] = useState<PriceCalculation>({})
+  const [products, setProducts] = useState<Product[]>([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [sponsoring, setSponsoring] = useState<number>(0)
   const [margin, setMargin] = useState<number>(0)
+  const [recalculating, setRecalculating] = useState(false)
+  const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const [userChangedValues, setUserChangedValues] = useState(false)
 
   useEffect(() => {
-    loadData()
-  }, [])
-
-  useEffect(() => {
-    if (selectedTextiles.length > 0 && printMethodCosts.length > 0 && printMethods.size > 0 && textiles.size > 0) {
-      // Aktualisiere printPositions aus selected_textiles falls vorhanden
-      const positionsFromTextiles: any = {}
-      selectedTextiles.forEach((textile) => {
-        if (textile.print_positions) {
-          positionsFromTextiles[textile.textile_id] = textile.print_positions
-        }
-      })
-      if (Object.keys(positionsFromTextiles).length > 0) {
-        setPrintPositions(positionsFromTextiles)
-      }
-      calculatePrices()
+    if (isInitialLoad) {
+      loadData()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTextiles.length, JSON.stringify(printPositions), printMethodCosts.length, printMethods.size, textiles.size, textilePrices.size, handlingCost?.cost_per_order, margin, sponsoring, JSON.stringify(selectedTextiles)])
+  }, [config])
+
+  useEffect(() => {
+    // Wenn Sponsoring oder Marge vom Benutzer geändert werden (nicht beim initialen Laden), berechne Preise neu
+    if (!isInitialLoad && userChangedValues && config?.id && config?.shop_id && products.length > 0) {
+      // Verzögere Neuberechnung, um mehrfache Aufrufe zu vermeiden
+      const timeout = setTimeout(() => {
+        recalculatePrices()
+        setUserChangedValues(false)
+      }, 1000)
+      return () => clearTimeout(timeout)
+    }
+  }, [sponsoring, margin, isInitialLoad, userChangedValues, config?.id, config?.shop_id, products.length])
 
   async function loadData() {
+    if (!config?.shop_id) {
+      setLoading(false)
+      return
+    }
+
     try {
-      // Lade Druckkosten (für Fallback)
-      const costsResponse = await fetch('/api/print-costs')
-      const costsData = await costsResponse.json()
-      if (costsResponse.ok) {
-        setPrintCosts(costsData.printCosts || [])
-      }
-
-      // Lade Druckarten-Preise
-      const printMethodCostsResponse = await fetch('/api/print-method-costs')
-      const printMethodCostsData = await printMethodCostsResponse.json()
-      if (printMethodCostsResponse.ok) {
-        setPrintMethodCosts(printMethodCostsData.printMethodCosts || [])
-      }
-
-      // Lade Druckarten
-      const printMethodsResponse = await fetch('/api/print-methods')
-      const printMethodsData = await printMethodsResponse.json()
-      if (printMethodsResponse.ok) {
-        const printMethodsMap = new Map<string, PrintMethod>()
-        printMethodsData.printMethods.forEach((method: PrintMethod) => {
-          printMethodsMap.set(method.name, method)
-        })
-        setPrintMethods(printMethodsMap)
-      }
-
-      // Lade Textilien
-      const textilesResponse = await fetch('/api/textile-catalog')
-      const textilesData = await textilesResponse.json()
-      if (textilesResponse.ok) {
-        const textilesMap = new Map<string, TextileCatalog>()
-        textilesData.textiles.forEach((textile: TextileCatalog) => {
-          textilesMap.set(textile.id, textile)
-        })
-        setTextiles(textilesMap)
-      }
-
-      // Lade Textilpreise aus Admin-Preisverwaltung
-      const pricesResponse = await fetch('/api/textile-prices')
-      const pricesData = await pricesResponse.json()
-      if (pricesResponse.ok) {
-        const pricesMap = new Map<string, TextilePrice>()
-        pricesData.prices?.forEach((price: TextilePrice) => {
-          pricesMap.set(price.textile_id, price)
-        })
-        setTextilePrices(pricesMap)
-      }
-
-      // Lade Handlingkosten
-      const handlingResponse = await fetch('/api/handling-costs')
-      const handlingData = await handlingResponse.json()
-      if (handlingResponse.ok && handlingData.handlingCost) {
-        setHandlingCost(handlingData.handlingCost)
-      }
-
-      // Lade Konfiguration
-      if (config?.selected_textiles && typeof config.selected_textiles === 'object') {
-        const selected = config.selected_textiles as any
-        if (Array.isArray(selected)) {
-          setSelectedTextiles(selected)
+      // Lade Produkte
+      const productsResponse = await fetch(`/api/products?shop_id=${config.shop_id}`)
+      const productsData = await productsResponse.json()
+      if (productsResponse.ok) {
+        setProducts(productsData.products || [])
+        
+        // #region agent log
+        if (productsData.products && productsData.products.length > 0) {
+          productsData.products.forEach((p: any) => {
+            fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/schools/[id]/lead-dashboard/components/PriceCalculator.tsx:80',message:'loadData - Products loaded in frontend',data:{productId:p.id,displayed_ek_netto:p.calculated_ek_netto,displayed_vk_brutto:p.calculated_vk_brutto,displayed_quantity:(p.print_config as any)?.quantity},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+          });
         }
+        // #endregion
       }
 
-      // Lade Druckpositionen aus config.print_positions ODER aus selected_textiles
-      if (config?.print_positions && typeof config.print_positions === 'object') {
-        setPrintPositions(config.print_positions)
-      } else if (selectedTextiles.length > 0) {
-        // Fallback: Extrahiere Positionen aus selected_textiles
-        const positionsFromTextiles: any = {}
-        selectedTextiles.forEach((textile) => {
-          if (textile.print_positions) {
-            positionsFromTextiles[textile.textile_id] = textile.print_positions
-          }
-        })
-        if (Object.keys(positionsFromTextiles).length > 0) {
-          setPrintPositions(positionsFromTextiles)
-        }
+      // Lade Sponsoring und Marge aus Konfiguration (nur beim initialen Laden oder wenn sich die Werte wirklich geändert haben)
+      const newSponsoring = config.sponsoring !== undefined && config.sponsoring !== null
+        ? (typeof config.sponsoring === 'number' ? config.sponsoring : parseFloat(config.sponsoring as any))
+        : 0
+      const newMargin = config.margin !== undefined && config.margin !== null
+        ? (typeof config.margin === 'number' ? config.margin : parseFloat(config.margin as any))
+        : 0
+
+      // Nur aktualisieren, wenn sich die Werte wirklich geändert haben (mit Toleranz für Rundungsfehler)
+      // UND wenn der Benutzer die Werte nicht gerade ändert
+      if (!userChangedValues && (Math.abs(newSponsoring - sponsoring) > 0.01 || Math.abs(newMargin - margin) > 0.01)) {
+        setSponsoring(newSponsoring)
+        setMargin(newMargin)
       }
 
-      if (config?.price_calculation && typeof config.price_calculation === 'object') {
-        setPriceCalculation(config.price_calculation as PriceCalculation)
-      }
-
-      // Lade Sponsoring und Marge aus Konfiguration
-      if (config?.sponsoring !== undefined && config.sponsoring !== null) {
-        const sponsoringValue = typeof config.sponsoring === 'number' 
-          ? config.sponsoring 
-          : parseFloat(config.sponsoring as any)
-        setSponsoring(isNaN(sponsoringValue) ? 0 : sponsoringValue)
-      }
-      if (config?.margin !== undefined && config.margin !== null) {
-        setMargin(typeof config.margin === 'number' ? config.margin : parseFloat(config.margin as any))
+      if (isInitialLoad) {
+        setIsInitialLoad(false)
       }
     } catch (error) {
       console.error('Error loading data:', error)
@@ -225,131 +113,58 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
     }
   }
 
-  function calculatePrices() {
-    const calculation: PriceCalculation = {}
+  async function recalculatePrices() {
+    if (!config?.id || !config?.shop_id || products.length === 0) return
 
-    selectedTextiles.forEach((textile) => {
-      const textileData = textiles.get(textile.textile_id)
-      if (!textileData) return
+    setRecalculating(true)
+    try {
+      // Speichere Sponsoring und Marge zuerst
+      await onSave({
+        sponsoring: sponsoring,
+        margin: margin,
+      })
 
-      // Prüfe ob Druckdateien für jede Position vorhanden sind
-      const hasFrontFiles = textile.print_files?.front && Object.keys(textile.print_files.front).length > 0
-      const hasBackFiles = textile.print_files?.back && Object.keys(textile.print_files.back).length > 0
-      const hasSideFiles = textile.print_files?.side && Object.keys(textile.print_files.side).length > 0
+      // Aktualisiere jedes Produkt (dies löst automatische Neuberechnung aus)
+      for (const product of products) {
+        const variants = product.product_variants || []
+        const colors = [...new Set(variants.map(v => v.color_name).filter(Boolean) as string[])]
+        const sizes = [...new Set(variants.map(v => v.name).filter(n => n !== 'Standard'))]
 
-      // Verwende Positionen aus selected_textiles ODER prüfe ob Druckdateien vorhanden sind
-      const positions = textile.print_positions || printPositions[textile.textile_id] || {
-        front: false,
-        back: false,
-        side: false,
+        await fetch('/api/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: product.id,
+            shop_id: product.shop_id,
+            textile_id: product.textile_id,
+            name: product.name,
+            print_config: product.print_config,
+            selected_colors: colors,
+            selected_sizes: sizes,
+            sort_index: product.sort_index,
+          }),
+        })
       }
 
-      // Eine Position ist aktiv wenn: Position-Checkbox aktiv ODER Druckdateien vorhanden
-      const activeFront = positions.front || hasFrontFiles
-      const activeBack = positions.back || hasBackFiles
-      const activeSide = positions.side || hasSideFiles
-
-      const printMethods = textile.print_methods || {}
-      
-      // Berechne Kosten basierend auf Druckarten pro Position/Farbe
-      let frontCost = 0
-      let backCost = 0
-      let sideCost = 0
-
-      // Hilfsfunktion: Berechne Kosten für eine Position
-      const calculatePositionCost = (position: 'front' | 'back' | 'side', methods: { [color: string]: string } | undefined): number => {
-        let cost = 0
-        
-        if (methods && Object.keys(methods).length > 0) {
-          // Wenn Druckarten gewählt sind, berechne Kosten pro Farbe
-          // methods enthält Druckart-Namen (z.B. "2 farbig Siebdruck")
-          Object.values(methods).forEach(methodName => {
-            // Finde Druckart-ID über Namen
-            const printMethod = printMethods.get(methodName)
-            if (printMethod) {
-              // Finde Preis für diese Druckart
-              const methodCost = printMethodCosts.find(c => c.print_method_id === printMethod.id && c.active)
-              if (methodCost) {
-                // Verwende cost_50_units falls vorhanden, sonst cost_per_unit
-                cost += methodCost.cost_50_units ?? methodCost.cost_per_unit ?? 0
-              }
-            }
-          })
-        }
-        
-        // Fallback: Wenn keine Kosten berechnet, verwende Standard-Druckkosten für diese Position
-        if (cost === 0) {
-          const defaultCost = printCosts.find(c => c.position === position && c.active)
-          if (defaultCost) {
-            cost = defaultCost.cost_50_units ?? defaultCost.cost_per_unit ?? 0
-          }
-        }
-        
-        return cost
-      }
-
-      // Berechne Kosten nur für aktive Positionen
-      if (activeFront) {
-        frontCost = calculatePositionCost('front', printMethods.front)
-      }
-      if (activeBack) {
-        backCost = calculatePositionCost('back', printMethods.back)
-      }
-      if (activeSide) {
-        sideCost = calculatePositionCost('side', printMethods.side)
-      }
-
-      const printCostsByPosition = {
-        front: frontCost,
-        back: backCost,
-        side: sideCost,
-      }
-
-      const totalPrintCost = printCostsByPosition.front + printCostsByPosition.back + printCostsByPosition.side
-      
-      // Verwende Preis aus Admin-Preisverwaltung, falls vorhanden, sonst base_price aus textile_catalog
-      const textilePrice = textilePrices.get(textile.textile_id)
-      const basePrice = textilePrice?.price ?? textileData.base_price ?? 0
-      
-      // Handlingkosten pro Textil (wird gleichmäßig auf alle Textilien verteilt)
-      const handlingCostPerTextile = handlingCost?.cost_per_order 
-        ? handlingCost.cost_per_order / selectedTextiles.length 
-        : 0
-      
-      const ekNetto = basePrice + totalPrintCost + handlingCostPerTextile + sponsoring
-      
-      // Berechne VK Brutto mit Marge und MwSt
-      // Marge ist relativ zum Verkaufspreis (VK), nicht zum EK
-      // Wenn Marge = 20%, dann ist EK = VK × (1 - 0.20) = VK × 0.80
-      // Umgekehrt: VK Netto = EK / (1 - Marge%)
-      const marginFactor = 1 - (margin / 100)
-      const vkNetto = marginFactor > 0 ? ekNetto / marginFactor : ekNetto
-      const vatMultiplier = 1.19 // 19% MwSt
-      const vkBrutto = vkNetto * vatMultiplier
-
-      calculation[textile.textile_id] = {
-        textile_name: textile.textile_name,
-        base_price: basePrice,
-        print_costs: printCostsByPosition,
-        total_print_cost: totalPrintCost,
-        handling_cost: handlingCostPerTextile,
-        final_price: vkBrutto, // Wird jetzt als VK Brutto gespeichert
-        ek_netto: ekNetto,
-        vk_brutto: vkBrutto,
-      }
-    })
-
-    setPriceCalculation(calculation)
+      // Lade Produkte neu
+      await loadData()
+    } catch (error) {
+      console.error('Error recalculating prices:', error)
+    } finally {
+      setRecalculating(false)
+    }
   }
 
   async function handleSave() {
     setSaving(true)
     try {
-      await onSave({ 
-        price_calculation: priceCalculation,
+      await onSave({
         sponsoring: sponsoring,
         margin: margin,
       })
+
+      // Berechne Preise neu
+      await recalculatePrices()
     } catch (error) {
       // Error wird bereits in onSave behandelt
     } finally {
@@ -365,30 +180,55 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
     )
   }
 
-  if (selectedTextiles.length === 0) {
+  if (!config?.shop_id) {
     return (
       <Alert severity="info" sx={{ mb: 2 }}>
-        Bitte wählen Sie zuerst Textilien aus.
+        Shop wird erstellt... Bitte warten Sie einen Moment.
       </Alert>
     )
   }
 
-  const totalBasePrice = Object.values(priceCalculation).reduce((sum, calc) => sum + calc.base_price, 0)
-  const totalPrintCost = Object.values(priceCalculation).reduce((sum, calc) => sum + calc.total_print_cost, 0)
-  const totalHandlingCost = Object.values(priceCalculation).reduce((sum, calc) => sum + (calc.handling_cost ?? 0), 0)
-  const totalEkNetto = Object.values(priceCalculation).reduce((sum, calc) => sum + (calc.ek_netto ?? 0), 0)
-  const totalVkBrutto = Object.values(priceCalculation).reduce((sum, calc) => sum + (calc.vk_brutto ?? 0), 0)
+  if (products.length === 0) {
+    return (
+      <Alert severity="info" sx={{ mb: 2 }}>
+        Bitte erstellen Sie zuerst Produkte in der Textilauswahl.
+      </Alert>
+    )
+  }
 
-  const hasZeroPrices = Object.values(priceCalculation).some(calc => calc.base_price === 0)
+  const totalEkNetto = products.reduce((sum, p) => sum + (p.calculated_ek_netto || 0), 0)
+  const totalVkBrutto = products.reduce((sum, p) => sum + (p.calculated_vk_brutto || 0), 0)
+
+  const hasZeroPrices = products.some(p => !p.calculated_ek_netto || !p.calculated_vk_brutto)
 
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Übersicht der berechneten Preise basierend auf Textil-Grundpreis (aus Admin-Preisverwaltung), Druckkosten und Handlingkosten.
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="body2" color="text.secondary">
+          Übersicht der berechneten Preise für alle Produkte. Preise werden automatisch basierend auf Textilpreis, Druckkosten, Handlingkosten, Sponsoring und Marge berechnet.
+        </Typography>
+        <IconButton
+          onClick={async () => {
+            setLoading(true)
+            await loadData()
+          }}
+          disabled={loading || recalculating}
+          size="small"
+          title="Produkte aktualisieren"
+        >
+          <RefreshIcon />
+        </IconButton>
+      </Box>
+
       {hasZeroPrices && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Einige Textilien haben noch keinen Grundpreis gesetzt. Bitte setzen Sie die Preise in der Admin-Verwaltung.
+          Einige Produkte haben noch keine Preise. Bitte überprüfen Sie die Konfiguration.
+        </Alert>
+      )}
+
+      {recalculating && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Preise werden neu berechnet...
         </Alert>
       )}
 
@@ -398,7 +238,10 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
           label="Sponsoring (€)"
           type="number"
           value={sponsoring}
-          onChange={(e) => setSponsoring(parseFloat(e.target.value) || 0)}
+          onChange={(e) => {
+            setSponsoring(parseFloat(e.target.value) || 0)
+            setUserChangedValues(true)
+          }}
           fullWidth
           sx={{ flex: '1 1 200px' }}
           size="small"
@@ -407,13 +250,16 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
             step: '0.01',
             min: '0',
           }}
-          helperText="Wird auf jedes Textil aufgeschlagen"
+          helperText="Wird auf jedes Produkt aufgeschlagen"
         />
         <FormControl sx={{ minWidth: 150 }} size="small">
           <InputLabel>Marge</InputLabel>
           <Select
             value={margin}
-            onChange={(e) => setMargin(Number(e.target.value))}
+            onChange={(e) => {
+              setMargin(Number(e.target.value))
+              setUserChangedValues(true)
+            }}
             label="Marge"
           >
             <MenuItem value={0}>0%</MenuItem>
@@ -434,49 +280,164 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
         <Table>
           <TableHead>
             <TableRow>
+              <TableCell sx={{ fontWeight: 600 }}>Produkt</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>Textil</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Grundpreis</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Druck Vorne</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Druck Hinten</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Druck Seite</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Gesamt Druck</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>Handling</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600 }}>Farben</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600 }}>Größen</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600 }}>Menge</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600 }}>EK Netto</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600 }}>VK Brutto</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {Object.values(priceCalculation).map((calc, index) => (
-              <TableRow key={index}>
-                <TableCell>{calc.textile_name}</TableCell>
-                <TableCell align="right">
-                  {calc.base_price > 0 ? `${calc.base_price.toFixed(2)} €` : 'Nicht gesetzt'}
-                </TableCell>
-                <TableCell align="right">{calc.print_costs.front.toFixed(2)} €</TableCell>
-                <TableCell align="right">{calc.print_costs.back.toFixed(2)} €</TableCell>
-                <TableCell align="right">{calc.print_costs.side.toFixed(2)} €</TableCell>
-                <TableCell align="right">{calc.total_print_cost.toFixed(2)} €</TableCell>
-                <TableCell align="right">{(calc.handling_cost ?? 0).toFixed(2)} €</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600 }}>
-                  {(calc.ek_netto ?? 0).toFixed(2)} €
-                </TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600 }}>
-                  {(calc.vk_brutto ?? 0).toFixed(2)} €
-                </TableCell>
-              </TableRow>
-            ))}
+            {products.map((product) => {
+              const printConfig = product.print_config as any
+              const hasFront = !!printConfig?.front
+              const hasBack = !!printConfig?.back
+              const hasSide = !!printConfig?.side
+              const positions = []
+              if (hasFront) positions.push('Vorne')
+              if (hasBack) positions.push('Hinten')
+              if (hasSide) positions.push('Seite')
+
+              const variants = product.product_variants || []
+              const colors = [...new Set(variants.map(v => v.color_name).filter(Boolean))]
+              const sizes = [...new Set(variants.map(v => v.name).filter(n => n !== 'Standard'))]
+              
+              // Lade Menge aus print_config (Standard: 50)
+              const quantity = (printConfig as any)?.quantity || 50
+
+              const handleQuantityChange = async (newQuantity: number) => {
+                // Aktualisiere print_config mit neuer Menge
+                // Stelle sicher, dass alle bestehenden Felder erhalten bleiben
+                const updatedPrintConfig = {
+                  ...(printConfig || {}),
+                  quantity: newQuantity,
+                }
+
+                console.log('Updating quantity:', newQuantity, 'for product:', product.id)
+                console.log('Updated print_config:', updatedPrintConfig)
+
+                // Aktualisiere Produkt
+                try {
+                  const response = await fetch('/api/products', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      id: product.id,
+                      shop_id: product.shop_id,
+                      textile_id: product.textile_id,
+                      name: product.name,
+                      print_config: updatedPrintConfig,
+                      selected_colors: colors,
+                      selected_sizes: sizes,
+                      sort_index: product.sort_index,
+                    }),
+                  })
+
+                  const data = await response.json()
+                  
+                  if (!response.ok) {
+                    throw new Error(data.error || 'Fehler beim Aktualisieren')
+                  }
+
+                  console.log('Product updated successfully:', data)
+                  console.log('[DEBUG] Response product prices:', {
+                    ek_netto: data.product?.calculated_ek_netto,
+                    vk_brutto: data.product?.calculated_vk_brutto,
+                    quantity: (data.product?.print_config as any)?.quantity
+                  })
+                  
+                  // Finde das aktuelle Produkt im State
+                  const currentProduct = products.find(p => p.id === product.id)
+                  console.log('[DEBUG] Current product prices before update:', {
+                    ek_netto: currentProduct?.calculated_ek_netto,
+                    vk_brutto: currentProduct?.calculated_vk_brutto,
+                    quantity: (currentProduct?.print_config as any)?.quantity
+                  })
+
+                  // Aktualisiere das Produkt direkt im State mit den neuen Preisen
+                  if (data.product) {
+                    setProducts(prevProducts => {
+                      const updated = prevProducts.map(p => {
+                        if (p.id === product.id) {
+                          const updatedProduct = { ...p, ...data.product, print_config: data.product.print_config }
+                          console.log('[DEBUG] Updated product in state:', {
+                            id: updatedProduct.id,
+                            ek_netto: updatedProduct.calculated_ek_netto,
+                            vk_brutto: updatedProduct.calculated_vk_brutto,
+                            quantity: (updatedProduct.print_config as any)?.quantity
+                          })
+                          return updatedProduct
+                        }
+                        return p
+                      })
+                      return updated
+                    })
+                  } else {
+                    console.warn('[DEBUG] No product in response, falling back to loadData()')
+                    // Fallback: Lade Produkte neu
+                    await loadData()
+                  }
+                } catch (error) {
+                  console.error('Error updating quantity:', error)
+                  alert('Fehler beim Aktualisieren der Menge: ' + (error as Error).message)
+                }
+              }
+
+              return (
+                <TableRow key={product.id}>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={600}>
+                      {product.name}
+                    </Typography>
+                    {positions.length > 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        Druck: {positions.join(', ')}
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {product.textile_catalog?.name || 'Unbekannt'}
+                    {product.textile_catalog?.brand && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        {product.textile_catalog.brand}
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell align="right">
+                    {colors.length}
+                  </TableCell>
+                  <TableCell align="right">
+                    {sizes.length}
+                  </TableCell>
+                  <TableCell align="right">
+                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                      <Select
+                        value={quantity}
+                        onChange={(e) => handleQuantityChange(Number(e.target.value))}
+                        disabled={recalculating}
+                      >
+                        <MenuItem value={50}>50</MenuItem>
+                        <MenuItem value={100}>100</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    {product.calculated_ek_netto
+                      ? `${product.calculated_ek_netto.toFixed(2)} €`
+                      : 'Nicht berechnet'}
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    {product.calculated_vk_brutto
+                      ? `${product.calculated_vk_brutto.toFixed(2)} €`
+                      : 'Nicht berechnet'}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
             <TableRow sx={{ backgroundColor: 'action.hover' }}>
-              <TableCell sx={{ fontWeight: 600 }}>Gesamt</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>
-                {totalBasePrice.toFixed(2)} €
-              </TableCell>
-              <TableCell colSpan={3} />
-              <TableCell align="right" sx={{ fontWeight: 600 }}>
-                {totalPrintCost.toFixed(2)} €
-              </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>
-                {handlingCost?.cost_per_order ? handlingCost.cost_per_order.toFixed(2) : '0.00'} €
-              </TableCell>
+              <TableCell colSpan={5} sx={{ fontWeight: 600 }}>Gesamt</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600 }}>
                 {totalEkNetto.toFixed(2)} €
               </TableCell>
@@ -492,13 +453,12 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
         <Button
           variant="contained"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || recalculating}
           size="small"
         >
-          {saving ? <CircularProgress size={20} /> : 'Speichern'}
+          {saving || recalculating ? <CircularProgress size={20} /> : 'Speichern & Preise neu berechnen'}
         </Button>
       </Box>
     </Box>
   )
 }
-

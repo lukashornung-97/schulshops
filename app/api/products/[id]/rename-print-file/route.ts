@@ -41,9 +41,10 @@ function parseStorageUrl(url: string): { bucket: string; path: string } | null {
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const resolvedParams = await Promise.resolve(params)
     const body = await request.json()
     const { imageId, newFileName } = body
 
@@ -66,7 +67,7 @@ export async function PATCH(
       .from('product_images')
       .select('*')
       .eq('id', imageId)
-      .eq('product_id', params.id)
+      .eq('product_id', resolvedParams.id)
       .single()
 
     if (imageError || !imageEntry) {

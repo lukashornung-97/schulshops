@@ -76,9 +76,17 @@ export async function POST(request: NextRequest) {
       active = true,
     } = body
 
-    if (!print_method_id || cost_per_unit === undefined) {
+    if (!print_method_id) {
       return NextResponse.json(
-        { error: 'print_method_id und cost_per_unit sind erforderlich' },
+        { error: 'print_method_id ist erforderlich' },
+        { status: 400 }
+      )
+    }
+
+    // Mindestens eine der Staffelpreise muss angegeben sein
+    if (cost_50_units === undefined && cost_100_units === undefined) {
+      return NextResponse.json(
+        { error: 'Mindestens cost_50_units oder cost_100_units muss angegeben werden' },
         { status: 400 }
       )
     }
@@ -101,9 +109,9 @@ export async function POST(request: NextRequest) {
       .from('print_method_costs')
       .insert({
         print_method_id,
-        cost_per_unit: parseFloat(cost_per_unit),
-        cost_50_units: cost_50_units ? parseFloat(cost_50_units) : null,
-        cost_100_units: cost_100_units ? parseFloat(cost_100_units) : null,
+        cost_per_unit: cost_per_unit !== undefined ? parseFloat(cost_per_unit) : null,
+        cost_50_units: cost_50_units !== undefined && cost_50_units !== null && cost_50_units !== '' ? parseFloat(cost_50_units) : null,
+        cost_100_units: cost_100_units !== undefined && cost_100_units !== null && cost_100_units !== '' ? parseFloat(cost_100_units) : null,
         active,
       })
       .select(`

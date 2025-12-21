@@ -85,6 +85,10 @@ export interface Database {
           base_price: number
           active: boolean
           sort_index: number | null
+          textile_id: string | null
+          print_config: Json | null
+          calculated_ek_netto: number | null
+          calculated_vk_brutto: number | null
           created_at: string
         }
         Insert: {
@@ -95,6 +99,10 @@ export interface Database {
           base_price: number
           active?: boolean
           sort_index?: number | null
+          textile_id?: string | null
+          print_config?: Json | null
+          calculated_ek_netto?: number | null
+          calculated_vk_brutto?: number | null
           created_at?: string
         }
         Update: {
@@ -105,6 +113,10 @@ export interface Database {
           base_price?: number
           active?: boolean
           sort_index?: number | null
+          textile_id?: string | null
+          print_config?: Json | null
+          calculated_ek_netto?: number | null
+          calculated_vk_brutto?: number | null
           created_at?: string
         }
       }
@@ -470,7 +482,7 @@ export interface Database {
         Row: {
           id: string
           print_method_id: string
-          cost_per_unit: number
+          cost_per_unit: number | null
           cost_50_units: number | null
           cost_100_units: number | null
           active: boolean
@@ -480,7 +492,7 @@ export interface Database {
         Insert: {
           id?: string
           print_method_id: string
-          cost_per_unit: number
+          cost_per_unit?: number | null
           cost_50_units?: number | null
           cost_100_units?: number | null
           active?: boolean
@@ -490,7 +502,7 @@ export interface Database {
         Update: {
           id?: string
           print_method_id?: string
-          cost_per_unit?: number
+          cost_per_unit?: number | null
           cost_50_units?: number | null
           cost_100_units?: number | null
           active?: boolean
@@ -507,6 +519,8 @@ export interface Database {
           selected_textiles: Json
           print_positions: Json
           price_calculation: Json | null
+          sponsoring: number | null
+          margin: number | null
           created_at: string
           updated_at: string
         }
@@ -518,6 +532,8 @@ export interface Database {
           selected_textiles?: Json
           print_positions?: Json
           price_calculation?: Json | null
+          sponsoring?: number | null
+          margin?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -529,6 +545,8 @@ export interface Database {
           selected_textiles?: Json
           print_positions?: Json
           price_calculation?: Json | null
+          sponsoring?: number | null
+          margin?: number | null
           created_at?: string
           updated_at?: string
         }

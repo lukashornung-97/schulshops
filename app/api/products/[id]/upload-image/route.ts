@@ -50,14 +50,27 @@ function parseStorageUrl(url: string): { bucket: string; path: string } | null {
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const resolvedParams = await Promise.resolve(params)
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:51',message:'POST handler entry',data:{paramsId:resolvedParams?.id,paramsType:typeof resolvedParams,paramsKeys:resolvedParams?Object.keys(resolvedParams):null,url:request.url},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:56',message:'Before FormData parse',data:{contentType:request.headers.get('content-type'),hasBody:!!request.body},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     const formData = await request.formData()
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:58',message:'After FormData parse',data:{hasFormData:!!formData,formDataKeys:formData?Array.from(formData.keys()):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     const file = formData.get('file') as File
     const type = formData.get('type') as string
     const isPrintFile = formData.get('is_print_file') === 'true'
     const customFileNameRaw = (formData.get('custom_file_name') as string | null)?.trim()
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:61',message:'FormData fields extracted',data:{hasFile:!!file,fileName:file?.name,type,isPrintFile,customFileNameRaw,paramsId:resolvedParams?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
 
     if (!file) {
       return NextResponse.json(
@@ -89,13 +102,22 @@ export async function POST(
     }
 
     // Prüfe ob Produkt existiert
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:92',message:'Before product lookup',data:{paramsId:resolvedParams?.id,paramsIdType:typeof resolvedParams?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     const { data: product, error: productError } = await supabaseAdmin
       .from('products')
       .select('id, name, shop_id')
-      .eq('id', params.id)
+      .eq('id', resolvedParams.id)
       .single()
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:96',message:'After product lookup',data:{hasProduct:!!product,productId:product?.id,productError:productError?.message,productErrorCode:productError?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
 
     if (productError || !product) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:98',message:'Product not found error',data:{paramsId:resolvedParams?.id,productError:productError?.message,productErrorCode:productError?.code,hasProduct:!!product},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       return NextResponse.json(
         { error: 'Produkt nicht gefunden' },
         { status: 404 }
@@ -140,7 +162,7 @@ export async function POST(
       baseFileName = `${shopName}_${productName}_${typeLabel}_${timestamp}`
     }
     
-    const storagePath = `${params.id}/${isPrintFile ? 'print' : 'images'}/${baseFileName}.${fileExt}`
+    const storagePath = `${resolvedParams.id}/${isPrintFile ? 'print' : 'images'}/${baseFileName}.${fileExt}`
     
     // Bestimme Storage Bucket basierend auf Typ
     const bucket = isPrintFile ? 'print-files' : 'product-images'
@@ -187,7 +209,7 @@ export async function POST(
 
     // Speichere in product_images Tabelle OHNE Textilfarbe (wird später zugeordnet)
     const imageData: any = {
-      product_id: params.id,
+      product_id: resolvedParams.id,
       textile_color_name: null, // Wird später zugeordnet
       image_type: type,
     }
@@ -223,6 +245,14 @@ export async function POST(
       is_print_file: isPrintFile,
     })
   } catch (error: any) {
+    // #region agent log
+    try {
+      const resolvedParams = await Promise.resolve(params)
+      fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:247',message:'Catch block error',data:{errorMessage:error?.message,errorStack:error?.stack,errorName:error?.name,paramsId:resolvedParams?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+    } catch {
+      fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'upload-image/route.ts:247',message:'Catch block error - params resolve failed',data:{errorMessage:error?.message,errorStack:error?.stack,errorName:error?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+    }
+    // #endregion
     console.error('Error uploading image:', error)
     return NextResponse.json(
       { error: error.message || 'Fehler beim Hochladen des Bildes' },
@@ -237,9 +267,10 @@ export async function POST(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const resolvedParams = await Promise.resolve(params)
     const searchParams = request.nextUrl.searchParams
     const type = searchParams.get('type')
     const textileColor = searchParams.get('textile_color')
@@ -262,7 +293,7 @@ export async function DELETE(
     const { data: imageEntry, error: imageError } = await supabaseAdmin
       .from('product_images')
       .select('*')
-      .eq('product_id', params.id)
+      .eq('product_id', resolvedParams.id)
       .eq('textile_color_name', textileColor)
       .eq('image_type', type)
       .single()

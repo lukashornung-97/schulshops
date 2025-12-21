@@ -13,6 +13,10 @@ import {
   IconButton,
   Alert,
   Snackbar,
+  TextField,
+  Grid,
+  Divider,
+  Chip,
 } from '@mui/material'
 import { supabase } from '@/lib/supabase'
 import { Database } from '@/types/database'
@@ -20,8 +24,23 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import DownloadIcon from '@mui/icons-material/Download'
 import StoreIcon from '@mui/icons-material/Store'
+import EditIcon from '@mui/icons-material/Edit'
+import SaveIcon from '@mui/icons-material/Save'
+import CancelIcon from '@mui/icons-material/Cancel'
 
 type Shop = Database['public']['Tables']['shops']['Row']
+type Product = Database['public']['Tables']['products']['Row']
+type ProductVariant = Database['public']['Tables']['product_variants']['Row']
+
+interface ProductSizeInfo {
+  product: Product
+  sizes: Set<string>
+}
+
+interface SizeOverride {
+  original: string
+  override: string
+}
 
 export default function ShopAnalytics() {
   const params = useParams()
@@ -29,6 +48,11 @@ export default function ShopAnalytics() {
   const [shop, setShop] = useState<Shop | null>(null)
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
+  const [productsWithSizes, setProductsWithSizes] = useState<ProductSizeInfo[]>([])
+  const [loadingSizes, setLoadingSizes] = useState(false)
+  const [sizeOverrides, setSizeOverrides] = useState<Map<string, Map<string, string>>>(new Map())
+  const [editingSize, setEditingSize] = useState<{ productId: string; originalSize: string } | null>(null)
+  const [editValue, setEditValue] = useState('')
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -39,10 +63,173 @@ export default function ShopAnalytics() {
     const shopId = params?.id as string
     if (shopId) {
       loadShop(shopId)
+      loadSizeOverrides(shopId)
     } else {
       setLoading(false)
     }
   }, [params])
+
+  useEffect(() => {
+    const shopId = params?.id as string
+    if (shopId && shop) {
+      loadProductsWithSizes(shopId)
+    }
+  }, [shop, params])
+
+  function loadSizeOverrides(shopId: string) {
+    try {
+      const stored = localStorage.getItem(`sizeOverrides_${shopId}`)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        const overridesMap = new Map<string, Map<string, string>>()
+        Object.keys(parsed).forEach(productId => {
+          const productOverrides = new Map<string, string>()
+          Object.keys(parsed[productId]).forEach(originalSize => {
+            productOverrides.set(originalSize, parsed[productId][originalSize])
+          })
+          overridesMap.set(productId, productOverrides)
+        })
+        setSizeOverrides(overridesMap)
+      }
+    } catch (error) {
+      console.error('Error loading size overrides:', error)
+    }
+  }
+
+  function saveSizeOverrides(shopId: string, overrides: Map<string, Map<string, string>>) {
+    try {
+      const serialized: Record<string, Record<string, string>> = {}
+      overrides.forEach((productOverrides, productId) => {
+        serialized[productId] = {}
+        productOverrides.forEach((override, originalSize) => {
+          serialized[productId][originalSize] = override
+        })
+      })
+      localStorage.setItem(`sizeOverrides_${shopId}`, JSON.stringify(serialized))
+    } catch (error) {
+      console.error('Error saving size overrides:', error)
+    }
+  }
+
+  async function loadProductsWithSizes(shopId: string) {
+    setLoadingSizes(true)
+    try {
+      // Lade alle Produkte des Shops
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('shop_id', shopId)
+        .eq('active', true)
+
+      if (productsError) throw productsError
+
+      // Lade alle Varianten dieser Produkte
+      const productIds = products?.map(p => p.id) || []
+      if (productIds.length === 0) {
+        setProductsWithSizes([])
+        setLoadingSizes(false)
+        return
+      }
+
+      const { data: variants, error: variantsError } = await supabase
+        .from('product_variants')
+        .select('*')
+        .in('product_id', productIds)
+        .eq('active', true)
+
+      if (variantsError) throw variantsError
+
+      // Gruppiere Varianten nach Produkt und sammle Größen
+      const productsMap = new Map<string, ProductSizeInfo>()
+      
+      products?.forEach(product => {
+        productsMap.set(product.id, {
+          product,
+          sizes: new Set<string>(),
+        })
+      })
+
+      variants?.forEach(variant => {
+        const productInfo = productsMap.get(variant.product_id)
+        if (productInfo) {
+          // Parse Größe aus Variante
+          let size: string | null = null
+          
+          if (variant.name && variant.name.trim() && variant.color_name && variant.color_name.trim()) {
+            size = variant.name.trim()
+          } else if (variant.name && variant.name.includes('/')) {
+            const parts = variant.name.split('/').map(s => s.trim())
+            if (parts.length >= 2) {
+              size = parts[0] || null
+            }
+          } else if (variant.name && variant.name.trim() && !variant.color_name) {
+            size = variant.name.trim()
+          }
+          
+          if (size) {
+            productInfo.sizes.add(size)
+          }
+        }
+      })
+
+      setProductsWithSizes(Array.from(productsMap.values()).filter(p => p.sizes.size > 0))
+    } catch (error) {
+      console.error('Error loading products with sizes:', error)
+      setSnackbar({
+        open: true,
+        message: 'Fehler beim Laden der Produktgrößen',
+        severity: 'error',
+      })
+    } finally {
+      setLoadingSizes(false)
+    }
+  }
+
+  function handleStartEdit(productId: string, originalSize: string) {
+    const productOverrides = sizeOverrides.get(productId)
+    const currentOverride = productOverrides?.get(originalSize) || originalSize
+    setEditingSize({ productId, originalSize })
+    setEditValue(currentOverride)
+  }
+
+  function handleCancelEdit() {
+    setEditingSize(null)
+    setEditValue('')
+  }
+
+  function handleSaveEdit() {
+    if (!editingSize || !shop) return
+
+    const { productId, originalSize } = editingSize
+    const newOverride = editValue.trim()
+
+    // Wenn der neue Wert leer ist oder gleich dem Original, entferne die Überschreibung
+    const newOverrides = new Map(sizeOverrides)
+    if (!newOverrides.has(productId)) {
+      newOverrides.set(productId, new Map())
+    }
+    
+    const productOverrides = new Map(newOverrides.get(productId)!)
+    
+    if (newOverride === '' || newOverride === originalSize) {
+      productOverrides.delete(originalSize)
+    } else {
+      productOverrides.set(originalSize, newOverride)
+    }
+    
+    newOverrides.set(productId, productOverrides)
+    setSizeOverrides(newOverrides)
+    saveSizeOverrides(shop.id, newOverrides)
+    
+    setEditingSize(null)
+    setEditValue('')
+    
+    setSnackbar({
+      open: true,
+      message: 'Größennamen erfolgreich gespeichert',
+      severity: 'success',
+    })
+  }
 
   async function loadShop(shopId: string) {
     try {
@@ -173,6 +360,94 @@ export default function ShopAnalytics() {
       const variantsMap = new Map(variantsData?.map(v => [v.id, v]) || [])
       const ordersMap = new Map(ordersData.map(o => [o.id, o]))
 
+      /**
+       * Lädt manuelle Überschreibungen aus localStorage für dieses Produkt
+       */
+      function getManualSizeOverrides(productId: string): Record<string, string> {
+        const productOverrides = sizeOverrides.get(productId)
+        if (!productOverrides) return {}
+        
+        const result: Record<string, string> = {}
+        productOverrides.forEach((override, original) => {
+          result[original] = override
+        })
+        return result
+      }
+
+      /**
+       * Normalisiert Größennamen für die Auswertung
+       * - Entfernt Whitespace
+       * - Normalisiert Standardgrößen (XS, S, M, L, XL, XXL, XXXL, XXXXL)
+       * - Behält Zahlenformate bei (z.B. "36", "38", "40")
+       * - Normalisiert Groß-/Kleinschreibung für Standardgrößen
+       * - Wendet manuelle Überschreibungen an (aus localStorage)
+       */
+      function normalizeSizeName(size: string | null, productId: string): string | null {
+        if (!size) return null
+        
+        // Entferne Whitespace
+        const trimmed = size.trim()
+        if (!trimmed) return null
+        
+        // Normalisiere Standardgrößen (case-insensitive)
+        const sizeUpper = trimmed.toUpperCase()
+        const standardSizes: Record<string, string> = {
+          'XS': 'XS',
+          'S': 'S',
+          'M': 'M',
+          'L': 'L',
+          'XL': 'XL',
+          'XXL': 'XXL',
+          'XXXL': 'XXXL',
+          'XXXXL': 'XXXXL',
+          // Unterstütze auch Varianten mit Leerzeichen oder Bindestrich
+          'X-S': 'XS',
+          'X-SMALL': 'XS',
+          'SMALL': 'S',
+          'MEDIUM': 'M',
+          'LARGE': 'L',
+          'X-L': 'XL',
+          'X-LARGE': 'XL',
+          'XX-L': 'XXL',
+          'XX-LARGE': 'XXL',
+          'XXX-L': 'XXXL',
+          'XXX-LARGE': 'XXXL',
+          'XXXX-L': 'XXXXL',
+          'XXXX-LARGE': 'XXXXL',
+        }
+        
+        let normalized: string
+        
+        // Prüfe ob es eine Standardgröße ist
+        if (standardSizes[sizeUpper]) {
+          normalized = standardSizes[sizeUpper]
+        }
+        // Prüfe ob es eine Zahl ist (z.B. "36", "38", "40")
+        else if (trimmed.match(/^(\d+)$/)) {
+          normalized = trimmed // Behalte Zahlenformat bei
+        }
+        // Für andere Formate: Normalisiere Groß-/Kleinschreibung (erster Buchstabe groß, Rest klein)
+        // aber nur wenn es nicht bereits gemischt ist
+        else if (trimmed === trimmed.toUpperCase() || trimmed === trimmed.toLowerCase()) {
+          normalized = trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase()
+        }
+        // Behalte Original bei wenn es bereits gemischt ist
+        else {
+          normalized = trimmed
+        }
+        
+        // Wende manuelle Überschreibungen an (aus localStorage, case-insensitive)
+        const manualOverrides = getManualSizeOverrides(productId)
+        const overrideKey = Object.keys(manualOverrides).find(
+          key => key.toUpperCase() === normalized.toUpperCase()
+        )
+        if (overrideKey) {
+          return manualOverrides[overrideKey]
+        }
+        
+        return normalized
+      }
+
       // Erstelle Analytics-Daten
       const analyticsMap = new Map<string, any>()
       
@@ -218,17 +493,20 @@ export default function ShopAnalytics() {
           }
         }
 
-        if (size) {
-          analytics.bySize.set(size, (analytics.bySize.get(size) || 0) + item.quantity)
+        // Normalisiere Größenname
+        const normalizedSize = normalizeSizeName(size, productId)
+
+        if (normalizedSize) {
+          analytics.bySize.set(normalizedSize, (analytics.bySize.get(normalizedSize) || 0) + item.quantity)
         }
         if (color) {
           analytics.byColor.set(color, (analytics.byColor.get(color) || 0) + item.quantity)
         }
-        if (size && color) {
-          if (!analytics.bySizeAndColor.has(size)) {
-            analytics.bySizeAndColor.set(size, new Map())
+        if (normalizedSize && color) {
+          if (!analytics.bySizeAndColor.has(normalizedSize)) {
+            analytics.bySizeAndColor.set(normalizedSize, new Map())
           }
-          const colorMap = analytics.bySizeAndColor.get(size)!
+          const colorMap = analytics.bySizeAndColor.get(normalizedSize)!
           colorMap.set(color, (colorMap.get(color) || 0) + item.quantity)
         }
       })
@@ -266,13 +544,16 @@ export default function ShopAnalytics() {
           }
         }
 
+        // Normalisiere Größenname für Fulfillment-Daten
+        const normalizedSize = normalizeSizeName(size, product.id)
+
         for (let i = 0; i < item.quantity; i++) {
           fulfillmentItemsList.push({
             customer_name: order.customer_name,
             customer_email: order.customer_email || null,
             class_name: order.class_name || null,
             product_name: product.name,
-            size: size,
+            size: normalizedSize,
             color: color,
             quantity: 1,
             order_id: item.order_id,
@@ -1165,6 +1446,119 @@ export default function ShopAnalytics() {
             </Box>
           </Box>
         </Box>
+
+        {/* Größenbearbeitung */}
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ mb: 3, fontWeight: 600 }}>
+              Größennamen bearbeiten
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Bearbeiten Sie die Größennamen für jedes Produkt. Die Änderungen werden bei der Auswertung verwendet.
+            </Typography>
+            
+            {loadingSizes ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                <CircularProgress />
+              </Box>
+            ) : productsWithSizes.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                Keine Produkte mit Größen gefunden.
+              </Typography>
+            ) : (
+              <Box>
+                {productsWithSizes.map((productInfo, index) => {
+                  const productOverrides = sizeOverrides.get(productInfo.product.id) || new Map()
+                  const sortedSizes = Array.from(productInfo.sizes).sort()
+                  
+                  return (
+                    <Box key={productInfo.product.id} sx={{ mb: index < productsWithSizes.length - 1 ? 4 : 0 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+                        {productInfo.product.name}
+                      </Typography>
+                      <Grid container spacing={2}>
+                        {sortedSizes.map((size) => {
+                          const isEditing = editingSize?.productId === productInfo.product.id && editingSize?.originalSize === size
+                          const override = productOverrides.get(size)
+                          const displaySize = override || size
+                          
+                          return (
+                            <Grid item xs={12} sm={6} md={4} key={size}>
+                              <Box
+                                sx={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 1,
+                                  p: 1.5,
+                                  border: '1px solid',
+                                  borderColor: 'divider',
+                                  borderRadius: 1,
+                                  bgcolor: override ? 'action.selected' : 'background.paper',
+                                }}
+                              >
+                                {isEditing ? (
+                                  <>
+                                    <TextField
+                                      size="small"
+                                      value={editValue}
+                                      onChange={(e) => setEditValue(e.target.value)}
+                                      onKeyPress={(e) => {
+                                        if (e.key === 'Enter') {
+                                          handleSaveEdit()
+                                        } else if (e.key === 'Escape') {
+                                          handleCancelEdit()
+                                        }
+                                      }}
+                                      autoFocus
+                                      sx={{ flexGrow: 1 }}
+                                    />
+                                    <IconButton
+                                      size="small"
+                                      color="primary"
+                                      onClick={handleSaveEdit}
+                                    >
+                                      <SaveIcon fontSize="small" />
+                                    </IconButton>
+                                    <IconButton
+                                      size="small"
+                                      onClick={handleCancelEdit}
+                                    >
+                                      <CancelIcon fontSize="small" />
+                                    </IconButton>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Box sx={{ flexGrow: 1 }}>
+                                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                        {displaySize}
+                                      </Typography>
+                                      {override && (
+                                        <Typography variant="caption" color="text.secondary">
+                                          Original: {size}
+                                        </Typography>
+                                      )}
+                                    </Box>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => handleStartEdit(productInfo.product.id, size)}
+                                    >
+                                      <EditIcon fontSize="small" />
+                                    </IconButton>
+                                  </>
+                                )}
+                              </Box>
+                            </Grid>
+                          )
+                        })}
+                      </Grid>
+                      {index < productsWithSizes.length - 1 && <Divider sx={{ mt: 3 }} />}
+                    </Box>
+                  )
+                })}
+              </Box>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardContent>

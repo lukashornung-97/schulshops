@@ -356,7 +356,6 @@ export default function PricingPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               print_method_id: methodId,
-              cost_per_unit: updateData.cost_per_unit ?? 0,
               cost_50_units: updateData.cost_50_units ?? null,
               cost_100_units: updateData.cost_100_units ?? null,
             }),
@@ -756,7 +755,7 @@ export default function PricingPage() {
   )
 }
 
-type CostField = 'cost_per_unit' | 'cost_50_units' | 'cost_100_units'
+type CostField = 'cost_50_units' | 'cost_100_units'
 
 function PrintMethodsPricingTable({
   printMethods,
@@ -782,7 +781,6 @@ function PrintMethodsPricingTable({
   }, [printMethodCosts])
 
   const fieldConfigs: { key: CostField; label: string }[] = [
-    { key: 'cost_per_unit', label: 'Standard (€)' },
     { key: 'cost_50_units', label: '50 Stück (€)' },
     { key: 'cost_100_units', label: '100 Stück (€)' },
   ]

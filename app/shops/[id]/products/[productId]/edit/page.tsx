@@ -356,6 +356,9 @@ export default function EditProduct() {
         const file = fileArray[i]
         
         try {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'edit/page.tsx:355',message:'Before file upload loop iteration',data:{fileIndex:i,totalFiles:fileArray.length,fileName:file.name,fileSize:file.size,fileType:file.type,productId:params.productId,type,isPrintFile},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
           const formData = new FormData()
           formData.append('file', file)
           formData.append('type', type)
@@ -367,15 +370,27 @@ export default function EditProduct() {
               : customFileName.trim()
             formData.append('custom_file_name', fileName)
           }
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'edit/page.tsx:370',message:'Before fetch request',data:{url:`/api/products/${params.productId}/upload-image`,productId:params.productId,hasFormData:!!formData,formDataKeys:Array.from(formData.keys())},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
 
           const response = await fetch(`/api/products/${params.productId}/upload-image`, {
             method: 'POST',
             body: formData,
           })
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'edit/page.tsx:375',message:'After fetch request',data:{status:response.status,statusText:response.statusText,ok:response.ok,contentType:response.headers.get('content-type')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
 
           const data = await response.json()
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'edit/page.tsx:377',message:'Response data parsed',data:{hasError:!!data.error,error:data.error,hasSuccess:!!data.success},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
 
           if (!response.ok) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'edit/page.tsx:379',message:'Response not OK - throwing error',data:{status:response.status,error:data.error,fileName:file.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
             throw new Error(data.error || 'Fehler beim Hochladen')
           }
 

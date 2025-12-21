@@ -99,7 +99,9 @@ export default function LeadDashboardPage() {
         throw new Error(data.error || 'Fehler beim Speichern')
       }
 
-      setConfig(data.config)
+      // Lade Config neu, um sicherzustellen, dass shop_id aktualisiert ist
+      await loadConfig()
+      
       setSnackbar({
         open: true,
         message: 'Änderungen gespeichert',
