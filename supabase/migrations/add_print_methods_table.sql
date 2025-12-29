@@ -57,3 +57,4 @@ INSERT INTO public.print_methods (name, display_order, active) VALUES
   ('Digitaldruck groß', 11, true)
 ON CONFLICT (name) DO NOTHING;
 
+

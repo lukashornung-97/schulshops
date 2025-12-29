@@ -80,3 +80,4 @@ Oder führen Sie die Migration-Datei aus:
 # Datei: supabase/migrations/update_textile_catalog_for_csv.sql
 ```
 
+

@@ -17,3 +17,4 @@ COMMENT ON COLUMN public.textile_catalog.base_price IS 'Einkaufspreis (kann spä
 COMMENT ON COLUMN public.textile_catalog.available_colors IS 'Farben aus CSV (produktfarben als JSON-Array)';
 COMMENT ON COLUMN public.textile_catalog.available_sizes IS 'Größen aus CSV (produktgrößen als JSON-Array)';
 
+

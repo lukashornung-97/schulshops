@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { randomUUID } from 'crypto'
 
 /**
  * API Route zum Hochladen von Vorschau-Bildern für Lead-Konfigurationen
@@ -10,6 +9,7 @@ import { randomUUID } from 'crypto'
  * - file: Das Vorschau-Bild
  * - textile_id: ID des Textils
  * - color: Farbe des Textils
+ * - type: 'front' | 'back' | 'side' (optional, Standard: 'front')
  */
 export async function POST(request: NextRequest) {
   try {
@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
     const file = formData.get('file') as File
     const textileId = formData.get('textile_id') as string
     const color = formData.get('color') as string
+    const type = (formData.get('type') as string) || 'front'
 
     if (!file) {
       return NextResponse.json(
@@ -40,21 +41,32 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Erstelle eindeutige ID für die Datei
-    const fileId = randomUUID()
-    const fileExt = file.name.split('.').pop() || 'jpg'
-    
-    // Normalisiere Dateinamen für Storage
-    const normalizeForFile = (value: string) =>
-      value
+    const validTypes = ['front', 'back', 'side']
+    if (!validTypes.includes(type)) {
+      return NextResponse.json(
+        { error: `Ungültiger Typ. Erlaubt: ${validTypes.join(', ')}` },
+        { status: 400 }
+      )
+    }
+
+    // Normalisiere Dateinamen für Storage (gleiche Funktion wie bei Bestandsshops)
+    const normalizeForFile = (value: string | null | undefined, fallback = 'x') =>
+      (value || fallback)
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '_')
         .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '') || 'file'
+        .replace(/^_|_$/g, '') || fallback
 
-    const baseFileName = normalizeForFile(file.name.replace(/\.[^/.]+$/, ''))
+    const fileExt = file.name.split('.').pop() || 'jpg'
+    const typeLabel = type === 'front' ? 'front' : type === 'back' ? 'back' : 'side'
+    
+    // Für Bilder verwende Timestamp für eindeutige Dateinamen (wie bei Bestandsshops)
+    // Da die Textilfarbe bereits bekannt ist, können wir sie im Dateinamen verwenden
+    const timestamp = Date.now()
     const normalizedColor = normalizeForFile(color)
-    const storagePath = `lead-configs/${textileId}/previews/${normalizedColor}/${fileId}_${baseFileName}.${fileExt}`
+    // Storage-Pfad im Format: lead-configs/{textileId}/images/{color}/{type}_{timestamp}.{ext}
+    // Ähnlich wie bei Bestandsshops: {productId}/images/{shopName}_{productName}_{type}_{timestamp}.{ext}
+    const storagePath = `lead-configs/${textileId}/images/${normalizedColor}/${typeLabel}_${timestamp}.${fileExt}`
 
     // Konvertiere File zu ArrayBuffer
     const arrayBuffer = await file.arrayBuffer()
@@ -82,10 +94,10 @@ export async function POST(request: NextRequest) {
       .getPublicUrl(storagePath)
 
     return NextResponse.json({
-      fileId,
       url: urlData.publicUrl,
       fileName: file.name,
       storagePath,
+      type,
     })
   } catch (error: any) {
     console.error('Error in POST /api/lead-config/upload-preview-image:', error)

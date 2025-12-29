@@ -27,6 +27,7 @@ import DeleteIcon from '@mui/icons-material/Delete'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import EditIcon from '@mui/icons-material/Edit'
+import ImageIcon from '@mui/icons-material/Image'
 import { Database } from '@/types/database'
 
 type TextileCatalog = Database['public']['Tables']['textile_catalog']['Row']
@@ -42,21 +43,30 @@ interface PrintFile {
   fileName: string
 }
 
+interface PreviewImage {
+  id: string
+  url: string
+  fileName: string
+}
+
 interface PrintConfig {
   front?: {
     method_id?: string
     method_name?: string
     files?: { [color: string]: PrintFile[] }
+    previews?: { [color: string]: PreviewImage[] }
   }
   back?: {
     method_id?: string
     method_name?: string
     files?: { [color: string]: PrintFile[] }
+    previews?: { [color: string]: PreviewImage[] }
   }
   side?: {
     method_id?: string
     method_name?: string
     files?: { [color: string]: PrintFile[] }
+    previews?: { [color: string]: PreviewImage[] }
   }
 }
 
@@ -89,6 +99,8 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
     side: false,
   })
   const [uploading, setUploading] = useState<string | null>(null)
+  const [uploadingPreview, setUploadingPreview] = useState<string | null>(null)
+  const [customFileName, setCustomFileName] = useState('')
 
   useEffect(() => {
     loadData()
@@ -269,18 +281,29 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
   async function handleFileUpload(position: 'front' | 'back' | 'side', files: FileList | null, color: string) {
     if (!files || files.length === 0 || !editingProduct || !color) return
 
+    if (!customFileName.trim()) {
+      alert('Bitte geben Sie einen Dateinamen für die Druckdatei ein.')
+      return
+    }
+
     setUploading(`${position}_${color}`)
 
     try {
       const fileArray = Array.from(files)
       const uploadedFiles: PrintFile[] = []
 
-      for (const file of fileArray) {
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i]
         const formData = new FormData()
         formData.append('file', file)
         formData.append('textile_id', editingProduct.textile_id || '')
         formData.append('position', position)
         formData.append('color', color)
+        // Für mehrere Dateien: Füge Index hinzu
+        const fileName = fileArray.length > 1 
+          ? `${customFileName.trim()}_${i + 1}` 
+          : customFileName.trim()
+        formData.append('custom_file_name', fileName)
 
         const response = await fetch('/api/lead-config/upload-print-file', {
           method: 'POST',
@@ -294,7 +317,7 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
 
         const data = await response.json()
         uploadedFiles.push({
-          id: data.fileId,
+          id: data.storagePath || `${position}_${color}_${i}`, // Fallback ID basierend auf Storage-Pfad
           url: data.url,
           fileName: data.fileName,
         })
@@ -325,6 +348,69 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
       alert(error.message || 'Fehler beim Hochladen')
     } finally {
       setUploading(null)
+    }
+  }
+
+  async function handlePreviewUpload(position: 'front' | 'back' | 'side', files: FileList | null, color: string) {
+    if (!files || files.length === 0 || !editingProduct || !color) return
+
+    setUploadingPreview(`${position}_${color}`)
+
+    try {
+      const fileArray = Array.from(files)
+      const uploadedPreviews: PreviewImage[] = []
+
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i]
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('textile_id', editingProduct.textile_id || '')
+        formData.append('color', color)
+        formData.append('type', position)
+
+        const response = await fetch('/api/lead-config/upload-preview-image', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Fehler beim Hochladen')
+        }
+
+        const data = await response.json()
+        uploadedPreviews.push({
+          id: data.storagePath || `${position}_${color}_${i}`,
+          url: data.url,
+          fileName: data.fileName,
+        })
+      }
+
+      // Aktualisiere print_config mit Vorschauen
+      const newConfig = { ...editingProduct.print_config }
+      if (!newConfig[position]) {
+        newConfig[position] = { files: {} }
+      }
+      if (!newConfig[position]!.previews) {
+        newConfig[position]!.previews = {}
+      }
+      if (!newConfig[position]!.previews![color]) {
+        newConfig[position]!.previews![color] = []
+      }
+      newConfig[position]!.previews![color] = [
+        ...(newConfig[position]!.previews![color] || []),
+        ...uploadedPreviews,
+      ]
+
+      setEditingProduct({
+        ...editingProduct,
+        print_config: newConfig,
+      })
+    } catch (error: any) {
+      console.error('Error uploading preview images:', error)
+      alert(error.message || 'Fehler beim Hochladen')
+    } finally {
+      setUploadingPreview(null)
     }
   }
 
@@ -615,48 +701,150 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
                               sx={{ mb: 2 }}
                             />
 
+                            {/* Dateiname für Druckdateien */}
+                            <TextField
+                              label="Dateiname für Druckdateien"
+                              value={customFileName}
+                              onChange={(e) => setCustomFileName(e.target.value)}
+                              fullWidth
+                              size="small"
+                              sx={{ mb: 2 }}
+                              placeholder="z. B. logo_design"
+                              helperText="Dieser Name wird für alle hochgeladenen Druckdateien verwendet"
+                            />
+
                             {/* Datei-Upload für jede Farbe */}
                             {editingProduct.selected_colors.length > 0 && (
                               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                                 {editingProduct.selected_colors.map((color) => {
                                   const files = positionConfig?.files?.[color] || []
+                                  const previews = positionConfig?.previews?.[color] || []
                                   const isUploading = uploading === `${position}_${color}`
+                                  const isUploadingPreview = uploadingPreview === `${position}_${color}`
 
                                   return (
                                     <Box key={color} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
                                       <Typography variant="caption" fontWeight={600} display="block" sx={{ mb: 0.5 }}>
                                         {color}
                                       </Typography>
+                                      
+                                      {/* Druckdateien */}
                                       {files.length > 0 && (
                                         <Box sx={{ mb: 1 }}>
-                                          {files.map((file) => (
-                                            <Typography key={file.id} variant="caption" display="block" sx={{ fontSize: '0.7rem', ml: 1 }}>
+                                          <Typography variant="caption" fontWeight={600} display="block" sx={{ fontSize: '0.7rem', mb: 0.5 }}>
+                                            Druckdateien:
+                                          </Typography>
+                                          {files.map((file, index) => (
+                                            <Typography key={file.id || index} variant="caption" display="block" sx={{ fontSize: '0.7rem', ml: 1 }}>
                                               {file.fileName.length > 30 ? file.fileName.substring(0, 30) + '...' : file.fileName}
                                             </Typography>
                                           ))}
                                         </Box>
                                       )}
-                                      <input
-                                        accept=".pdf,.ai,.eps,.psd"
-                                        style={{ display: 'none' }}
-                                        id={`print-file-${position}-${color}`}
-                                        type="file"
-                                        multiple
-                                        onChange={(e) => handleFileUpload(position, e.target.files, color)}
-                                        disabled={isUploading}
-                                      />
-                                      <label htmlFor={`print-file-${position}-${color}`}>
-                                        <Button
-                                          variant="outlined"
-                                          component="span"
-                                          fullWidth
-                                          size="small"
-                                          startIcon={isUploading ? <CircularProgress size={14} /> : <CloudUploadIcon sx={{ fontSize: 16 }} />}
-                                          disabled={isUploading}
-                                        >
-                                          {isUploading ? '...' : 'Dateien hochladen'}
-                                        </Button>
-                                      </label>
+                                      
+                                      {/* Vorschauen */}
+                                      {previews.length > 0 && (
+                                        <Box sx={{ mb: 1 }}>
+                                          <Typography variant="caption" fontWeight={600} display="block" sx={{ fontSize: '0.7rem', mb: 0.5 }}>
+                                            Vorschauen:
+                                          </Typography>
+                                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                            {previews.map((preview, index) => (
+                                              <Box key={preview.id || index} sx={{ position: 'relative' }}>
+                                                <img
+                                                  src={preview.url}
+                                                  alt={preview.fileName}
+                                                  style={{
+                                                    width: 60,
+                                                    height: 60,
+                                                    objectFit: 'cover',
+                                                    borderRadius: 4,
+                                                    border: '1px solid #ddd',
+                                                  }}
+                                                />
+                                                <IconButton
+                                                  size="small"
+                                                  onClick={() => {
+                                                    const newConfig = { ...editingProduct.print_config }
+                                                    if (newConfig[position]?.previews?.[color]) {
+                                                      newConfig[position]!.previews![color] = newConfig[position]!.previews![color].filter(
+                                                        (p) => p.id !== preview.id
+                                                      )
+                                                      setEditingProduct({
+                                                        ...editingProduct,
+                                                        print_config: newConfig,
+                                                      })
+                                                    }
+                                                  }}
+                                                  sx={{
+                                                    position: 'absolute',
+                                                    top: -8,
+                                                    right: -8,
+                                                    backgroundColor: 'error.main',
+                                                    color: 'white',
+                                                    width: 20,
+                                                    height: 20,
+                                                    '&:hover': {
+                                                      backgroundColor: 'error.dark',
+                                                    },
+                                                  }}
+                                                >
+                                                  <DeleteIcon sx={{ fontSize: 12 }} />
+                                                </IconButton>
+                                              </Box>
+                                            ))}
+                                          </Box>
+                                        </Box>
+                                      )}
+                                      
+                                      <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                                        {/* Upload für Druckdateien */}
+                                        <input
+                                          accept=".pdf,.ai,.eps,.psd"
+                                          style={{ display: 'none' }}
+                                          id={`print-file-${position}-${color}`}
+                                          type="file"
+                                          multiple
+                                          onChange={(e) => handleFileUpload(position, e.target.files, color)}
+                                          disabled={isUploading || !customFileName.trim()}
+                                        />
+                                        <label htmlFor={`print-file-${position}-${color}`} style={{ flex: 1 }}>
+                                          <Button
+                                            variant="outlined"
+                                            component="span"
+                                            fullWidth
+                                            size="small"
+                                            startIcon={isUploading ? <CircularProgress size={14} /> : <CloudUploadIcon sx={{ fontSize: 16 }} />}
+                                            disabled={isUploading || !customFileName.trim()}
+                                          >
+                                            {isUploading ? '...' : 'Druckdateien'}
+                                          </Button>
+                                        </label>
+                                        
+                                        {/* Upload für Vorschauen */}
+                                        <input
+                                          accept="image/*"
+                                          style={{ display: 'none' }}
+                                          id={`preview-${position}-${color}`}
+                                          type="file"
+                                          multiple
+                                          onChange={(e) => handlePreviewUpload(position, e.target.files, color)}
+                                          disabled={isUploadingPreview}
+                                        />
+                                        <label htmlFor={`preview-${position}-${color}`} style={{ flex: 1 }}>
+                                          <Button
+                                            variant="outlined"
+                                            component="span"
+                                            fullWidth
+                                            size="small"
+                                            color="secondary"
+                                            startIcon={isUploadingPreview ? <CircularProgress size={14} /> : <ImageIcon sx={{ fontSize: 16 }} />}
+                                            disabled={isUploadingPreview}
+                                          >
+                                            {isUploadingPreview ? '...' : 'Vorschauen'}
+                                          </Button>
+                                        </label>
+                                      </Box>
                                     </Box>
                                   )
                                 })}

@@ -198,6 +198,17 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
 
   const totalEkNetto = products.reduce((sum, p) => sum + (p.calculated_ek_netto || 0), 0)
   const totalVkBrutto = products.reduce((sum, p) => sum + (p.calculated_vk_brutto || 0), 0)
+  
+  // Berechne Gewinn Netto für jedes Produkt und Gesamtsumme
+  const calculateProfitNetto = (ekNetto: number | null, vkBrutto: number | null): number => {
+    if (!ekNetto || !vkBrutto) return 0
+    const vkNetto = vkBrutto / 1.19 // 19% MwSt abziehen
+    return vkNetto - ekNetto
+  }
+  
+  const totalProfitNetto = products.reduce((sum, p) => {
+    return sum + calculateProfitNetto(p.calculated_ek_netto, p.calculated_vk_brutto)
+  }, 0)
 
   const hasZeroPrices = products.some(p => !p.calculated_ek_netto || !p.calculated_vk_brutto)
 
@@ -287,6 +298,7 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
               <TableCell align="right" sx={{ fontWeight: 600 }}>Menge</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600 }}>EK Netto</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600 }}>VK Brutto</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600 }}>Gewinn Netto</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -433,6 +445,11 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
                       ? `${product.calculated_vk_brutto.toFixed(2)} €`
                       : 'Nicht berechnet'}
                   </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    {product.calculated_ek_netto && product.calculated_vk_brutto
+                      ? `${calculateProfitNetto(product.calculated_ek_netto, product.calculated_vk_brutto).toFixed(2)} €`
+                      : 'Nicht berechnet'}
+                  </TableCell>
                 </TableRow>
               )
             })}
@@ -443,6 +460,9 @@ export default function PriceCalculator({ schoolId, config, onSave, onNext, onBa
               </TableCell>
               <TableCell align="right" sx={{ fontWeight: 600, fontSize: '1.1rem' }}>
                 {totalVkBrutto.toFixed(2)} €
+              </TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600, fontSize: '1.1rem' }}>
+                {totalProfitNetto.toFixed(2)} €
               </TableCell>
             </TableRow>
           </TableBody>

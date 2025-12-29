@@ -26,3 +26,4 @@ COMMENT ON COLUMN public.products.print_config IS 'Druckkonfiguration: { front: 
 COMMENT ON COLUMN public.products.calculated_ek_netto IS 'Berechneter Einkaufspreis Netto';
 COMMENT ON COLUMN public.products.calculated_vk_brutto IS 'Berechneter Verkaufspreis Brutto';
 
+

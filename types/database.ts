@@ -17,7 +17,7 @@ export interface Database {
           city: string | null
           country: string | null
           contact_id: string | null
-          status: 'lead' | 'active' | 'production' | 'existing'
+          status: 'lead' | 'shopeinrichtung' | 'active' | 'production' | 'existing'
           created_at: string
         }
         Insert: {

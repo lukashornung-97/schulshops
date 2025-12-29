@@ -87,3 +87,4 @@ INSERT INTO public.handling_costs (cost_per_order, active)
 VALUES (0, true)
 ON CONFLICT DO NOTHING;
 
+

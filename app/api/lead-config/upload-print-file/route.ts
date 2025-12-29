@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { randomUUID } from 'crypto'
 
 /**
  * API Route zum Hochladen von Druckdateien für Lead-Konfigurationen
@@ -10,6 +9,8 @@ import { randomUUID } from 'crypto'
  * - file: Die Druckdatei
  * - textile_id: ID des Textils
  * - position: 'front' | 'back' | 'side'
+ * - color: Farbe des Textils
+ * - custom_file_name: Benutzerdefinierter Dateiname (optional, wird empfohlen)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
     const textileId = formData.get('textile_id') as string
     const position = formData.get('position') as string
     const color = formData.get('color') as string
+    const customFileNameRaw = (formData.get('custom_file_name') as string | null)?.trim()
 
     if (!file) {
       return NextResponse.json(
@@ -41,21 +43,30 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Erstelle eindeutige ID für die Datei
-    const fileId = randomUUID()
-    const fileExt = file.name.split('.').pop() || 'dat'
-    
-    // Normalisiere Dateinamen für Storage
-    const normalizeForFile = (value: string) =>
-      value
+    // Normalisiere Dateinamen für Storage (gleiche Funktion wie bei Bestandsshops)
+    const normalizeForFile = (value: string | null | undefined, fallback = 'x') =>
+      (value || fallback)
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '_')
         .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '') || 'file'
+        .replace(/^_|_$/g, '') || fallback
 
-    const baseFileName = normalizeForFile(file.name.replace(/\.[^/.]+$/, ''))
+    const fileExt = file.name.split('.').pop() || 'dat'
+    const typeLabel = position === 'front' ? 'front' : position === 'back' ? 'back' : 'side'
+    
+    // Für Druckdateien verwende den benutzerdefinierten Dateinamen oder den Originalnamen
+    let baseFileName: string
+    if (customFileNameRaw && customFileNameRaw.length > 0) {
+      baseFileName = normalizeForFile(customFileNameRaw, 'file')
+    } else {
+      // Fallback: Verwende normalisierten Originalnamen
+      baseFileName = normalizeForFile(file.name.replace(/\.[^/.]+$/, ''), 'file')
+    }
+    
     const normalizedColor = normalizeForFile(color)
-    const storagePath = `lead-configs/${textileId}/${position}/${normalizedColor}/${fileId}_${baseFileName}.${fileExt}`
+    // Storage-Pfad im Format: lead-configs/{textileId}/print/{color}/{position}_{filename}.{ext}
+    // Ähnlich wie bei Bestandsshops: {productId}/print/{filename}.{ext}
+    const storagePath = `lead-configs/${textileId}/print/${normalizedColor}/${typeLabel}_${baseFileName}.${fileExt}`
 
     // Konvertiere File zu ArrayBuffer
     const arrayBuffer = await file.arrayBuffer()
@@ -83,10 +94,10 @@ export async function POST(request: NextRequest) {
       .getPublicUrl(storagePath)
 
     return NextResponse.json({
-      fileId,
       url: urlData.publicUrl,
       fileName: file.name,
       storagePath,
+      customFileName: customFileNameRaw || null,
     })
   } catch (error: any) {
     console.error('Error in POST /api/lead-config/upload-print-file:', error)

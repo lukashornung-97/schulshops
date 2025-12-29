@@ -238,11 +238,7 @@ export default function LeadDashboardPage() {
                 <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
                   4. Bestätigung
                 </Typography>
-                {config?.status === 'pending_approval' ? (
-                  <Alert severity="warning" sx={{ mb: 2 }}>
-                    Ihre Konfiguration wartet auf Bestätigung durch einen Administrator.
-                  </Alert>
-                ) : config?.status === 'approved' ? (
+                {config?.status === 'approved' ? (
                   <>
                     <Alert severity="success" sx={{ mb: 2 }}>
                       Ihre Konfiguration wurde bestätigt. Der Shop wurde erstellt.
@@ -259,25 +255,53 @@ export default function LeadDashboardPage() {
                 ) : (
                   <>
                     <Alert severity="info" sx={{ mb: 2 }}>
-                      Überprüfen Sie alle Bereiche und reichen Sie die Konfiguration zur Bestätigung ein.
+                      Überprüfen Sie alle Bereiche und bestätigen Sie die Konfiguration. Der Shop wird automatisch erstellt.
                     </Alert>
                     <Button
                       variant="contained"
                       onClick={async () => {
-                        try {
-                          await saveConfig({ status: 'pending_approval' })
+                        if (!config?.id) {
                           setSnackbar({
                             open: true,
-                            message: 'Konfiguration zur Bestätigung eingereicht',
+                            message: 'Bitte speichern Sie zuerst die Konfiguration',
+                            severity: 'error',
+                          })
+                          return
+                        }
+
+                        setSaving(true)
+                        try {
+                          const response = await fetch(`/api/lead-config/${config.id}/confirm`, {
+                            method: 'POST',
+                          })
+
+                          const data = await response.json()
+
+                          if (!response.ok) {
+                            throw new Error(data.error || 'Fehler bei der Bestätigung')
+                          }
+
+                          // Lade Config neu, um den aktualisierten Status und shop_id zu erhalten
+                          await loadConfig()
+
+                          setSnackbar({
+                            open: true,
+                            message: 'Konfiguration erfolgreich bestätigt. Der Shop wurde erstellt.',
                             severity: 'success',
                           })
-                        } catch (error) {
-                          // Error wird bereits in saveConfig behandelt
+                        } catch (error: any) {
+                          setSnackbar({
+                            open: true,
+                            message: error.message || 'Fehler bei der Bestätigung',
+                            severity: 'error',
+                          })
+                        } finally {
+                          setSaving(false)
                         }
                       }}
-                      disabled={saving}
+                      disabled={saving || !config?.id}
                     >
-                      {saving ? <CircularProgress size={20} /> : 'Zur Bestätigung einreichen'}
+                      {saving ? <CircularProgress size={20} /> : 'Konfiguration bestätigen'}
                     </Button>
                   </>
                 )}

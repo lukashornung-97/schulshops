@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
 import {
   Container,
   Typography,
@@ -41,49 +40,11 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import InfoIcon from '@mui/icons-material/Info'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
-import BarChartIcon from '@mui/icons-material/BarChart'
-import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Snackbar from '@mui/material/Snackbar'
 
 type Shop = Database['public']['Tables']['shops']['Row']
 type Product = Database['public']['Tables']['products']['Row']
-
-// Hilfsfunktion: Prüft ob ein Shop wirklich "live" ist
-// Ein Shop ist nur live, wenn status='live' UND shop_close_at nicht in der Vergangenheit liegt
-function isShopReallyLive(shop: Shop): boolean {
-  if (shop.status !== 'live') return false
-  if (shop.shop_close_at) {
-    const closeDate = new Date(shop.shop_close_at)
-    const now = new Date()
-    if (closeDate < now) return false
-  }
-  return true
-}
-
-// Funktion: Prüft und schließt Shops automatisch, deren shop_close_at in der Vergangenheit liegt
-async function checkAndCloseExpiredShops(shop: Shop | null): Promise<Shop | null> {
-  if (!shop) return null
-  
-  const now = new Date()
-  if (shop.status === 'live' && shop.shop_close_at && new Date(shop.shop_close_at) < now) {
-    // Schließe den abgelaufenen Shop
-    const { data, error } = await supabase
-      .from('shops')
-      .update({ status: 'closed' })
-      .eq('id', shop.id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error(`Error closing shop ${shop.id}:`, error)
-      return shop
-    }
-    
-    return data || shop
-  }
-  
-  return shop
-}
 
 export default function ShopDetail() {
   const params = useParams()
@@ -118,9 +79,16 @@ export default function ShopDetail() {
     shop_open_at: '',
     shop_close_at: '',
   })
-  const [editingSlug, setEditingSlug] = useState(false)
-  const [slugValue, setSlugValue] = useState('')
-  const [savingSlug, setSavingSlug] = useState(false)
+  const [csvUploadDialogOpen, setCsvUploadDialogOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<{
+    success: boolean
+    imported?: number
+    skipped?: number
+    errors?: Array<{ orderKey: string; error: string }>
+    message?: string
+  } | null>(null)
 
   useEffect(() => {
     if (params.id) {
@@ -146,13 +114,6 @@ export default function ShopDetail() {
       }
 
       const currentStatus = schoolData?.status
-
-      // Wenn der Status manuell auf 'production' oder 'existing' gesetzt wurde,
-      // überschreibe ihn nicht automatisch
-      if (currentStatus === 'production' || currentStatus === 'existing') {
-        console.log('School status is manually set to', currentStatus, '- not auto-updating')
-        return
-      }
 
       // Wenn ein Shop aktiv ist, setze Schule auf 'active'
       if (hasActiveShop && currentStatus !== 'active') {
@@ -185,79 +146,14 @@ export default function ShopDetail() {
       
       // Stelle sicher, dass die Daten korrekt gesetzt sind
       if (data) {
-        // Prüfe und schließe Shop automatisch, wenn shop_close_at in der Vergangenheit liegt
-        const updatedShop = await checkAndCloseExpiredShops(data)
-        setShop(updatedShop)
-        setSlugValue(updatedShop.slug)
-        // Aktualisiere Schulstatus wenn Shop wirklich aktiv ist
-        if (updatedShop && isShopReallyLive(updatedShop)) {
+        setShop(data)
+        // Aktualisiere Schulstatus wenn Shop aktiv ist
+        if (data.status === 'live') {
           await updateSchoolStatusIfNeeded(true)
         }
       }
     } catch (error) {
       console.error('Error loading shop:', error)
-    }
-  }
-
-  async function handleSaveSlug() {
-    if (!shop || !slugValue.trim()) {
-      setSnackbar({
-        open: true,
-        message: 'Slug darf nicht leer sein',
-        severity: 'error',
-      })
-      return
-    }
-
-    // Validiere Slug-Format (nur Kleinbuchstaben, Zahlen, Bindestriche)
-    const slugRegex = /^[a-z0-9-]+$/
-    if (!slugRegex.test(slugValue.toLowerCase())) {
-      setSnackbar({
-        open: true,
-        message: 'Slug darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten',
-        severity: 'error',
-      })
-      return
-    }
-
-    setSavingSlug(true)
-    try {
-      const { error } = await supabase
-        .from('shops')
-        .update({ slug: slugValue.toLowerCase().trim() })
-        .eq('id', shop.id)
-
-      if (error) {
-        // Prüfe ob es ein Unique-Constraint-Fehler ist
-        if (error.code === '23505') {
-          setSnackbar({
-            open: true,
-            message: 'Dieser Slug wird bereits verwendet',
-            severity: 'error',
-          })
-        } else {
-          throw error
-        }
-        return
-      }
-
-      // Aktualisiere lokalen State
-      setShop({ ...shop, slug: slugValue.toLowerCase().trim() })
-      setEditingSlug(false)
-      setSnackbar({
-        open: true,
-        message: 'Slug erfolgreich aktualisiert',
-        severity: 'success',
-      })
-    } catch (error: any) {
-      console.error('Error updating slug:', error)
-      setSnackbar({
-        open: true,
-        message: error?.message || 'Fehler beim Aktualisieren des Slugs',
-        severity: 'error',
-      })
-    } finally {
-      setSavingSlug(false)
     }
   }
 
@@ -558,90 +454,36 @@ export default function ShopDetail() {
     }
   }
 
-  async function handleShopifyDialogSubmit() {
-    if (!shopifyCredentials.shopDomain || !shopifyCredentials.accessToken) {
-      return
-    }
-
-    // Teste die Verbindung vor dem Speichern
-    if (!connectionTestResult?.success) {
-      await testShopifyConnection()
-      // Warte kurz, damit der Test abgeschlossen wird
-      await new Promise(resolve => setTimeout(resolve, 500))
-      if (!connectionTestResult?.success) {
-        return // Test fehlgeschlagen, nicht speichern
-      }
-    }
-
-    // Speichere in der Datenbank
-    try {
-      const response = await fetch('/api/shopify/save-connection', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          shopId: shop?.id,
-          shopDomain: shopifyCredentials.shopDomain,
-          accessToken: shopifyCredentials.accessToken,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        // Speichere auch lokal für schnellen Zugriff
-        localStorage.setItem('shopify_credentials', JSON.stringify(shopifyCredentials))
-        setShopifyDialogOpen(false)
-        alert('Shopify-Verbindung erfolgreich gespeichert!')
-      } else {
-        alert(`Fehler beim Speichern: ${data.error}`)
-      }
-    } catch (error: any) {
-      console.error('Error saving connection:', error)
-      alert(`Fehler beim Speichern der Verbindung: ${error.message}`)
+  function handleShopifyDialogSubmit() {
+    if (shopifyCredentials.shopDomain && shopifyCredentials.accessToken) {
+      // Teste die Verbindung vor dem Speichern
+      testShopifyConnection()
     }
   }
 
   useEffect(() => {
-    // Lade Shopify-Verbindung aus der Datenbank, wenn Shop geladen ist
-    async function loadShopifyConnection() {
-      if (!shop?.id) return
-
+    // Lade gespeicherte Shopify-Credentials
+    const saved = localStorage.getItem('shopify_credentials')
+    if (saved) {
       try {
-        const response = await fetch(`/api/shopify/get-connection?shopId=${shop.id}`)
-        if (response.ok) {
-          const data = await response.json()
-          if (data.success && data.connection) {
-            setShopifyCredentials({
-              shopDomain: data.connection.shop_domain,
-              accessToken: data.connection.access_token,
-            })
-            // Speichere auch lokal für schnellen Zugriff
-            localStorage.setItem('shopify_credentials', JSON.stringify({
-              shopDomain: data.connection.shop_domain,
-              accessToken: data.connection.access_token,
-            }))
-            return
-          }
-        }
-      } catch (error) {
-        console.error('Error loading Shopify connection:', error)
+        setShopifyCredentials(JSON.parse(saved))
+      } catch (e) {
+        // Ignore
       }
-
-      // Fallback: Lade aus localStorage (nur Komfort, Token kommt idealerweise aus DB/OAuth)
-      const saved = localStorage.getItem('shopify_credentials')
-      if (saved) {
-        try {
-          setShopifyCredentials(JSON.parse(saved))
-        } catch (e) {
-          // Ignore
-        }
+    } else {
+      // Fallback: Verwende Standard-Credentials falls vorhanden
+      // Diese können in .env.local gesetzt werden
+      const defaultDomain = process.env.NEXT_PUBLIC_SHOPIFY_SHOP_DOMAIN
+      const defaultToken = process.env.NEXT_PUBLIC_SHOPIFY_ACCESS_TOKEN
+      
+      if (defaultDomain && defaultToken) {
+        setShopifyCredentials({
+          shopDomain: defaultDomain,
+          accessToken: defaultToken,
+        })
       }
     }
-
-    loadShopifyConnection()
-  }, [shop?.id])
+  }, [])
 
   if (loading) {
     return (
@@ -664,18 +506,6 @@ export default function ShopDetail() {
       <Container maxWidth="xl" sx={{ py: 6 }}>
         <Box sx={{ mb: 5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-            <IconButton
-              onClick={() => router.push(`/schools/${shop.school_id}`)}
-              sx={{
-                background: 'white',
-                boxShadow: 1,
-                '&:hover': {
-                  background: '#f8fafc',
-                },
-              }}
-            >
-              <ArrowBackIcon />
-            </IconButton>
             <Box
               sx={{
                 width: 64,
@@ -705,75 +535,19 @@ export default function ShopDetail() {
               >
                 {shop.name}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {editingSlug ? (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
-                    <TextField
-                      size="small"
-                      value={slugValue}
-                      onChange={(e) => setSlugValue(e.target.value)}
-                      sx={{
-                        flexGrow: 1,
-                        '& .MuiInputBase-input': {
-                          textTransform: 'uppercase',
-                          fontWeight: 500,
-                        },
-                      }}
-                      disabled={savingSlug}
-                    />
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={handleSaveSlug}
-                      disabled={savingSlug}
-                    >
-                      {savingSlug ? <CircularProgress size={20} /> : <EditIcon />}
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={() => {
-                        setEditingSlug(false)
-                        setSlugValue(shop.slug)
-                      }}
-                      disabled={savingSlug}
-                    >
-                      <CloseIcon />
-                    </IconButton>
-                  </Box>
-                ) : (
-                  <>
-                    <Typography 
-                      variant="body1" 
-                      sx={{ 
-                        color: 'text.secondary',
-                        fontWeight: 500,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                      }}
-                    >
-                      {shop.slug}
-                    </Typography>
-                    <IconButton
-                      size="small"
-                      onClick={() => setEditingSlug(true)}
-                      sx={{ ml: 0.5 }}
-                    >
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                  </>
-                )}
-              </Box>
+              <Typography 
+                variant="body1" 
+                sx={{ 
+                  color: 'text.secondary',
+                  fontWeight: 500,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}
+              >
+                {shop.slug}
+              </Typography>
           </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Link href={`/shops/${params?.id}/analytics`} style={{ textDecoration: 'none' }}>
-              <Button
-                variant="contained"
-                startIcon={<BarChartIcon />}
-                sx={{ mr: 1 }}
-              >
-                Auswertung
-              </Button>
-            </Link>
             <Chip
               label={shop.status}
               color={getStatusColor(shop.status) as any}
@@ -889,6 +663,14 @@ export default function ShopDetail() {
           Produkte
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          <Tooltip title="Bestellungen aus CSV hochladen">
+            <IconButton
+              color="primary"
+              onClick={() => setCsvUploadDialogOpen(true)}
+            >
+              <UploadFileIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Shopify Credentials konfigurieren">
             <IconButton
               color="primary"
@@ -977,15 +759,12 @@ export default function ShopDetail() {
                           )}
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Bearbeiten">
-                        <IconButton
-                          size="small"
-                          color="primary"
-                          onClick={() => router.push(`/shops/${params.id}/products/${product.id}/edit`)}
-                        >
-                          <EditIcon />
-                        </IconButton>
-                      </Tooltip>
+                      <Button
+                        size="small"
+                        onClick={() => router.push(`/products/${product.id}`)}
+                      >
+                        Öffnen
+                      </Button>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -1044,12 +823,8 @@ export default function ShopDetail() {
                   alert('Bitte geben Sie zuerst die Shop Domain ein')
                   return
                 }
-                // Starte OAuth Flow mit Shop-Domain und interner Shop-ID als state
-                const response = await fetch(
-                  `/api/shopify/oauth?shop=${encodeURIComponent(
-                    shopifyCredentials.shopDomain
-                  )}&shopId=${encodeURIComponent(shop?.id || '')}`
-                )
+                // Starte OAuth Flow
+                const response = await fetch(`/api/shopify/oauth?shop=${shopifyCredentials.shopDomain}`)
                 const data = await response.json()
                 if (data.authUrl) {
                   window.location.href = data.authUrl
@@ -1194,6 +969,179 @@ export default function ShopDetail() {
             startIcon={deleting ? <CircularProgress size={20} /> : <DeleteIcon />}
           >
             {deleting ? 'Lösche...' : 'Löschen'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* CSV Upload Dialog */}
+      <Dialog open={csvUploadDialogOpen} onClose={() => !uploading && setCsvUploadDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Bestellungen aus CSV hochladen
+          <IconButton
+            aria-label="close"
+            onClick={() => !uploading && setCsvUploadDialogOpen(false)}
+            disabled={uploading}
+            sx={{
+              position: 'absolute',
+              right: 8,
+              top: 8,
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Die CSV-Datei sollte folgende Spalten enthalten:
+              <br />
+              • Customer Name (oder Customer: First name + Customer: Last name)
+              <br />
+              • Customer Email (oder Email)
+              <br />
+              • Class Name (oder Klasse)
+              <br />
+              • Product Name (oder Line items: Title)
+              <br />
+              • Product Variant (optional, oder Line items: Variant title)
+              <br />
+              • Quantity (oder Line items: Quantity)
+              <br />
+              • Unit Price (optional, oder Line items: Price)
+              <br />
+              • Order Date (optional, oder Created at)
+            </Alert>
+
+            <input
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              id="csv-file-input"
+              type="file"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  setCsvFile(file)
+                  setUploadResult(null)
+                }
+              }}
+              disabled={uploading}
+            />
+            <label htmlFor="csv-file-input">
+              <Button
+                variant="outlined"
+                component="span"
+                fullWidth
+                startIcon={<UploadFileIcon />}
+                disabled={uploading}
+                sx={{ mb: 2 }}
+              >
+                {csvFile ? csvFile.name : 'CSV-Datei auswählen'}
+              </Button>
+            </label>
+
+            {uploadResult && (
+              <Alert
+                severity={uploadResult.success ? 'success' : 'error'}
+                sx={{ mt: 2 }}
+                onClose={() => setUploadResult(null)}
+              >
+                {uploadResult.success ? (
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">
+                      Erfolgreich importiert!
+                    </Typography>
+                    <Typography variant="body2">
+                      {uploadResult.imported} Bestellung(en) importiert
+                      {uploadResult.skipped && uploadResult.skipped > 0 && (
+                        <>, {uploadResult.skipped} übersprungen</>
+                      )}
+                    </Typography>
+                    {uploadResult.errors && uploadResult.errors.length > 0 && (
+                      <Box sx={{ mt: 1 }}>
+                        <Typography variant="caption" fontWeight="bold">
+                          Fehler:
+                        </Typography>
+                        {uploadResult.errors.slice(0, 5).map((err, idx) => (
+                          <Typography key={idx} variant="caption" display="block">
+                            • {err.error}
+                          </Typography>
+                        ))}
+                        {uploadResult.errors.length > 5 && (
+                          <Typography variant="caption" display="block">
+                            ... und {uploadResult.errors.length - 5} weitere
+                          </Typography>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                ) : (
+                  <Typography variant="body2">
+                    {uploadResult.message || 'Fehler beim Hochladen'}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCsvUploadDialogOpen(false)} disabled={uploading}>
+            Schließen
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!csvFile) {
+                setUploadResult({
+                  success: false,
+                  message: 'Bitte wählen Sie eine CSV-Datei aus',
+                })
+                return
+              }
+
+              setUploading(true)
+              setUploadResult(null)
+
+              try {
+                const formData = new FormData()
+                formData.append('file', csvFile)
+
+                const response = await fetch(`/api/shops/${shop.id}/upload-orders`, {
+                  method: 'POST',
+                  body: formData,
+                })
+
+                const data = await response.json()
+
+                if (!response.ok) {
+                  setUploadResult({
+                    success: false,
+                    message: data.error || 'Fehler beim Hochladen',
+                  })
+                  return
+                }
+
+                setUploadResult({
+                  success: true,
+                  imported: data.imported,
+                  skipped: data.skipped,
+                  errors: data.errors,
+                })
+
+                // Lade Bestellungen neu falls vorhanden
+                // (könnte hier die Orders-Seite neu laden, aber das ist optional)
+              } catch (error: any) {
+                setUploadResult({
+                  success: false,
+                  message: error.message || 'Fehler beim Hochladen der Datei',
+                })
+              } finally {
+                setUploading(false)
+              }
+            }}
+            variant="contained"
+            disabled={!csvFile || uploading}
+            startIcon={uploading ? <CircularProgress size={20} /> : <UploadFileIcon />}
+          >
+            {uploading ? 'Lade hoch...' : 'Hochladen'}
           </Button>
         </DialogActions>
       </Dialog>

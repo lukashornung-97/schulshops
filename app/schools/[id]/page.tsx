@@ -249,7 +249,7 @@ export default function SchoolDetail() {
     setEditingName(false)
   }
 
-  async function handleStatusChange(newStatus: 'lead' | 'active' | 'production' | 'existing') {
+  async function handleStatusChange(newStatus: 'lead' | 'shopeinrichtung' | 'active' | 'production' | 'existing') {
     console.log('handleStatusChange called with:', newStatus, 'current status:', school?.status)
     
     if (!school) {
@@ -304,6 +304,8 @@ export default function SchoolDetail() {
     switch (status) {
       case 'lead':
         return 'Lead'
+      case 'shopeinrichtung':
+        return 'Shopeinrichtung'
       case 'active':
         return 'Aktiv'
       case 'production':
@@ -319,6 +321,8 @@ export default function SchoolDetail() {
     switch (status) {
       case 'lead':
         return 'warning'
+      case 'shopeinrichtung':
+        return 'info'
       case 'active':
         return 'success'
       case 'production':

@@ -67,3 +67,4 @@ Nach erfolgreicher Migration können Sie:
 ### "column base_price does not exist"
 - Führen Sie die Update-Migration `update_textile_catalog_for_csv.sql` aus.
 
+
