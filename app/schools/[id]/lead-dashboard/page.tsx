@@ -30,6 +30,7 @@ export default function LeadDashboardPage() {
   const [config, setConfig] = useState<LeadConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -141,6 +142,50 @@ export default function LeadDashboardPage() {
       throw error
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function regeneratePdf() {
+    if (!config?.id) {
+      setSnackbar({
+        open: true,
+        message: 'Keine Konfiguration gefunden',
+        severity: 'error',
+      })
+      return
+    }
+
+    setRegenerating(true)
+    try {
+      const response = await fetch(`/api/lead-config/${config.id}/confirm`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Fehler bei der PDF-Generierung')
+      }
+
+      if (data.pdfUrl) {
+        setPdfUrl(data.pdfUrl)
+      }
+
+      await loadConfig()
+
+      setSnackbar({
+        open: true,
+        message: 'Änderungen übernommen und PDF aktualisiert.',
+        severity: 'success',
+      })
+    } catch (error: any) {
+      setSnackbar({
+        open: true,
+        message: error.message || 'Fehler bei der PDF-Generierung',
+        severity: 'error',
+      })
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -268,6 +313,15 @@ export default function LeadDashboardPage() {
                       Ihre Konfiguration wurde bestätigt. Das PDF-Angebotsdokument wurde erstellt.
                     </Alert>
                     <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        onClick={regeneratePdf}
+                        disabled={regenerating || !config?.id}
+                        sx={{ textTransform: 'none' }}
+                      >
+                        {regenerating ? <CircularProgress size={20} /> : 'Änderungen in PDF übernehmen'}
+                      </Button>
                       {pdfUrl && (
                         <Button
                           variant="contained"

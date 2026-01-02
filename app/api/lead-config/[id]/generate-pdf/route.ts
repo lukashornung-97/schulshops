@@ -123,18 +123,72 @@ export async function POST(
         ? product.textile_catalog[0] 
         : product.textile_catalog
       
-      // Ensure colors are strings only
-      const colors = [...new Set(
+      // Farben: bevorzugt vollständige Textil-Farbpalette, sonst Varianten
+      const normalizeColorName = (value: any) => {
+        if (typeof value === 'string') return value.trim()
+        if (value && typeof value.name === 'string') return value.name.trim()
+        return ''
+      }
+
+      const normalizeColorHex = (value: any): string | null => {
+        if (typeof value === 'string') return value
+        if (value && typeof value.hex === 'string') return value.hex
+        if (value && typeof value.hex_code === 'string') return value.hex_code
+        return null
+      }
+
+      const textileAvailableColors = Array.isArray(textile?.available_colors)
+        ? textile.available_colors
+        : []
+
+      const normalizedAvailableColors = textileAvailableColors
+        .map((c: any) => ({
+          name: normalizeColorName(c),
+          hex: normalizeColorHex(c),
+        }))
+        .filter((c: { name: string; hex: string | null }) => c.name.length > 0)
+
+      // Falls keine Textilfarben vorhanden, nutze Variantenfarben
+      const fallbackVariantColors = [...new Set(
         variants
-          .map((v: any) => v.color_name)
-          .filter((c: any): c is string => typeof c === 'string' && c.length > 0)
-      )]
-      // Ensure sizes are strings only, filter out undefined/null/objects
-      const sizes = [...new Set(
+          .map((v: any) => (typeof v.color_name === 'string' ? v.color_name.trim() : ''))
+          .filter((c: string): c is string => c.length > 0)
+      )].map((name) => ({ name, hex: null as string | null }))
+
+      const colorsSource = normalizedAvailableColors.length > 0
+        ? normalizedAvailableColors
+        : fallbackVariantColors
+
+      const variantColorSet = new Set(
         variants
-          .map((v: any) => v.name)
-          .filter((n: any): n is string => typeof n === 'string' && n !== 'Standard' && n.length > 0)
-      )]
+          .map((v: any) => (typeof v.color_name === 'string' ? v.color_name.trim() : ''))
+          .filter((c: string) => c.length > 0)
+      )
+
+      const colors = colorsSource.map((c: { name: string }) => c.name)
+      // Normalize sizes (remove non-breaking spaces, collapse whitespace) and filter
+      const normalizeSize = (value: any) => {
+        if (typeof value !== 'string') return ''
+        const cleaned = value
+          // Entferne Zero-Width / Steuerzeichen, die Rendering verschieben können
+          .replace(/[\u2000-\u200f\uFEFF]/g, '')
+          // Vereinheitliche alle Whitespaces (inkl. NBSP) auf einfache Spaces
+          .replace(/\s+/gu, ' ')
+          .trim()
+        // Entferne alle nicht-Text/zahl-Bestandteile (lässt gängige Größen wie 3XL, 4XL, XS, S, M, L, XL, XXL, XXXL zu)
+        return cleaned.replace(/[^\p{L}\p{N}+\-./]/gu, '')
+      }
+
+      const sizes: string[] = [
+        ...new Set<string>(
+          variants
+            .map((v: any) => normalizeSize(v.name))
+            .filter(
+              (n: string): n is string =>
+                n.length > 0 && n !== 'Standard'
+            )
+        ),
+      ]
 
       // Finde Bild: zuerst Druckvorschau, dann Textilbild, dann Standard
       let imageUrl: string | null = null
@@ -160,19 +214,26 @@ export async function POST(
         imageUrl = textile.image_url
       }
 
-      // Erstelle Farb-Info mit Hex-Werten
-      const colorInfo = colors.map((colorName: string) => {
-        const variant = variants.find((v: any) => v.color_name === colorName)
-        // Ensure hex is always a string or null, never an object
-        let hexValue: string | null = null
-        if (variant?.color_hex) {
-          if (typeof variant.color_hex === 'string') {
+      // Erstelle Farb-Info mit Hex-Werten: bevorzugt Textilfarben mit Hex, sonst Varianten-Hex
+      const colorInfo = colorsSource.map((c: { name: string; hex?: string | null }) => {
+        let hexValue = normalizeColorHex(c.hex)
+
+        // Fallback: finde Hex aus Varianten, wenn nicht vorhanden
+        if (!hexValue) {
+          const variant = variants.find(
+            (v: any) =>
+              typeof v.color_name === 'string' &&
+              v.color_name.trim() === c.name
+          )
+          if (variant?.color_hex && typeof variant.color_hex === 'string') {
             hexValue = variant.color_hex
           }
         }
+
         return {
-          name: String(colorName),
+          name: c.name,
           hex: hexValue,
+          selected: variantColorSet.has(c.name),
         }
       })
 
@@ -279,7 +340,7 @@ async function generatePdfWithPdfKit(
     name: string
     description?: string | null
     imageUrl?: string | null
-    colors: Array<{ name: string; hex?: string | null }>
+    colors: Array<{ name: string; hex?: string | null; selected?: boolean }>
     sizes: string[]
     price: number
     textileName?: string | null
@@ -316,7 +377,7 @@ async function generatePdfWithPdfKit(
 
     const chunks: Buffer[] = []
     
-    doc.on('data', (chunk) => {
+    doc.on('data', (chunk: Buffer) => {
       chunks.push(chunk)
     })
 
@@ -324,7 +385,7 @@ async function generatePdfWithPdfKit(
       resolve(Buffer.concat(chunks))
     })
 
-    doc.on('error', (error) => {
+    doc.on('error', (error: Error) => {
       reject(error)
     })
 
@@ -333,6 +394,20 @@ async function generatePdfWithPdfKit(
     const textColor = '#333333'
     const lightGray = '#f5f5f5'
     const borderGray = '#e0e0e0'
+    const pageMargin = 40
+    const contentWidth = 515
+    const previewBoxWidth = Math.floor(contentWidth * 0.5) // Vorschau ~ halbe Seitenbreite
+    const previewBoxHeight = 260
+    const columnGutter = 20
+    const leftColumnWidth = contentWidth - previewBoxWidth - columnGutter
+    const leftColumnX = pageMargin
+    const rightColumnX = leftColumnX + leftColumnWidth + columnGutter
+    const cleanSizeForRender = (value: string) =>
+      value
+        .replace(/[\u2000-\u200f\uFEFF]/g, '')
+        .replace(/\s+/gu, ' ')
+        .trim()
+        .replace(/[^\p{L}\p{N}+\-./]/gu, '')
 
     // Iteriere über alle Produkte
     products.forEach((product, index) => {
@@ -360,104 +435,218 @@ async function generatePdfWithPdfKit(
       doc
         .strokeColor(primaryColor)
         .lineWidth(2)
-        .moveTo(40, doc.y)
-        .lineTo(555, doc.y)
+        .moveTo(pageMargin, doc.y)
+        .lineTo(pageMargin + contentWidth, doc.y)
         .stroke()
         .moveDown(1.5)
 
-      // Produktbild (falls vorhanden)
+      // Ausgangsposition für zweispaltiges Layout
+      const sectionTopY = doc.y
+
+      // Vorschaubild rechts in einem Kasten
+      const previewBoxY = sectionTopY
+      doc
+        .roundedRect(
+          rightColumnX,
+          previewBoxY,
+          previewBoxWidth,
+          previewBoxHeight,
+          6
+        )
+        .fillColor('#fafafa')
+        .fill()
+        .strokeColor(borderGray)
+        .lineWidth(1)
+        .roundedRect(
+          rightColumnX,
+          previewBoxY,
+          previewBoxWidth,
+          previewBoxHeight,
+          6
+        )
+        .stroke()
+
+      // Produktbild (falls vorhanden) in der Box anzeigen
       const imageBuffer = productImages.get(index)
       if (imageBuffer) {
         try {
-          doc.image(imageBuffer, {
-            fit: [515, 200],
+          doc.image(imageBuffer, rightColumnX + 6, previewBoxY + 6, {
+            fit: [previewBoxWidth - 12, previewBoxHeight - 12],
             align: 'center',
+            valign: 'center',
           })
-          doc.moveDown(0.5)
         } catch (error) {
           console.warn(`Could not add image to PDF for product ${product.name}:`, error)
           // Weiter ohne Bild
         }
+      } else {
+        doc
+          .fontSize(10)
+          .fillColor('#999999')
+          .font('Helvetica')
+          .text(
+            'Keine Vorschau verfügbar',
+            rightColumnX + 10,
+            previewBoxY + previewBoxHeight / 2 - 5,
+            {
+              width: previewBoxWidth - 20,
+              align: 'center',
+            }
+          )
       }
 
-      // Produktname
+      // Linke Spalte: Preis oben, darunter Größen, dann Farben
+      // Preis-Box direkt unter dem Headerbereich
+      const priceBoxX = leftColumnX
+      const priceBoxWidth = leftColumnWidth
+      const priceBoxY = sectionTopY
       doc
-        .fontSize(20)
-        .fillColor(textColor)
+        .roundedRect(priceBoxX, priceBoxY, priceBoxWidth, 60, 4)
+        .fillColor('#f8f9fa')
+        .fill()
+        .strokeColor(borderGray)
+        .lineWidth(1)
+        .roundedRect(priceBoxX, priceBoxY, priceBoxWidth, 60, 4)
+        .stroke()
+
+      doc
+        .fontSize(11)
+        .fillColor('#666666')
+        .font('Helvetica')
+        .text('Verkaufspreis (inkl. MwSt.)', priceBoxX + 10, priceBoxY + 10, {
+          width: priceBoxWidth - 20,
+          align: 'left',
+        })
+
+      const priceText = `${product.price.toFixed(2)} €`
+      doc
+        .fontSize(28)
+        .fillColor(primaryColor)
         .font('Helvetica-Bold')
-        .text(product.name, { align: 'left' })
-        .moveDown(0.5)
+        .text(priceText, priceBoxX + 10, priceBoxY + 25, {
+          width: priceBoxWidth - 20,
+          align: 'left',
+        })
 
-      // Produktbeschreibung
-      if (product.description) {
+      // Position nach Preisbox
+      doc.y = priceBoxY + 60 + 10
+
+      // Größen
+      if (product.sizes && product.sizes.length > 0) {
         doc
-          .fontSize(11)
-          .fillColor('#666666')
-          .font('Helvetica')
-          .text(product.description, {
+          .fontSize(12)
+          .fillColor(textColor)
+          .font('Helvetica-Bold')
+          .text('Verfügbare Größen:', leftColumnX, doc.y, {
+            width: leftColumnWidth,
             align: 'left',
-            lineGap: 2,
           })
-          .moveDown(0.5)
+          .moveDown(0.3)
+
+        const sizeChipHeight = 20
+        const sizeChipPadding = 8
+        let sizeX = leftColumnX
+        let sizeY = doc.y
+        const maxRowWidth = leftColumnX + leftColumnWidth
+
+        product.sizes.forEach((sizeRaw) => {
+          const size = cleanSizeForRender(sizeRaw)
+          if (!size) {
+            return
+          }
+
+          doc.fontSize(10).font('Helvetica')
+          const rawTextWidth = doc.widthOfString(size)
+          const sizeTextWidth = rawTextWidth + sizeChipPadding * 2
+
+          if (sizeX + sizeTextWidth > maxRowWidth) {
+            sizeX = leftColumnX
+            sizeY += sizeChipHeight + 5
+          }
+
+          // Größen-Chip zeichnen
+          doc
+            .roundedRect(sizeX, sizeY, sizeTextWidth, sizeChipHeight, 4)
+            .fillColor(lightGray)
+            .fill()
+            .strokeColor(borderGray)
+            .lineWidth(1)
+            .roundedRect(sizeX, sizeY, sizeTextWidth, sizeChipHeight, 4)
+            .stroke()
+
+          // Größen-Text
+          const textHeight = doc.currentLineHeight()
+          const textX = sizeX + (sizeTextWidth - rawTextWidth) / 2
+          const textY = sizeY + (sizeChipHeight - textHeight) / 2
+          doc
+            .fontSize(10)
+            .fillColor(textColor)
+            .font('Helvetica')
+            .text(size, textX, textY + 0.5) // kleiner Ausgleich für font ascent/descent
+
+          sizeX += sizeTextWidth + 5
+        })
+
+        // Setze Y-Position nach Größen
+        doc.y = sizeY + sizeChipHeight + 10
+        doc.moveDown(0.5)
       }
 
-      // Textil-Info
-      let textileInfo = ''
-      if (product.textileName) {
-        textileInfo = product.textileName
-      }
-      if (product.textileBrand) {
-        textileInfo = textileInfo 
-          ? `${textileInfo} - ${product.textileBrand}` 
-          : product.textileBrand
-      }
-      if (textileInfo) {
-        doc
-          .fontSize(11)
-          .fillColor('#666666')
-          .font('Helvetica')
-          .text(textileInfo, { align: 'left' })
-          .moveDown(0.5)
-      }
-
-      // Farben
+      // Farben (nach Größen)
       if (product.colors && product.colors.length > 0) {
         doc
           .fontSize(12)
           .fillColor(textColor)
           .font('Helvetica-Bold')
-          .text('Verfügbare Farben:', { align: 'left' })
+          .text('Verfügbare Farben:', leftColumnX, doc.y, {
+            width: leftColumnWidth,
+            align: 'left',
+          })
           .moveDown(0.3)
 
         const colorBoxSize = 30
         const colorBoxSpacing = 40
-        const startX = 40
+        const startX = leftColumnX
         let colorX = startX
         let colorY = doc.y
-        const maxColorsPerRow = Math.floor(515 / colorBoxSpacing)
+        const maxColorsPerRow = 6
         let colorsInRow = 0
 
-        product.colors.forEach((color, colorIndex) => {
+        product.colors.forEach((color) => {
           if (colorsInRow >= maxColorsPerRow) {
             colorX = startX
             colorY += colorBoxSize + 20
             colorsInRow = 0
           }
 
-          // Farbbox zeichnen
+          // Farbbox zeichnen (rund) und ausgewählte Farbe highlighten
           const hexColor = color.hex || '#cccccc'
+          const radius = colorBoxSize / 2
+          const centerX = colorX + radius
+          const centerY = colorY + radius
+
           doc
-            .rect(colorX, colorY, colorBoxSize, colorBoxSize)
+            .circle(centerX, centerY, radius)
             .fillColor(hexColor)
             .fill()
-            .strokeColor(borderGray)
-            .lineWidth(1)
-            .rect(colorX, colorY, colorBoxSize, colorBoxSize)
-            .stroke()
+
+          if (color.selected) {
+            doc
+              .strokeColor(primaryColor)
+              .lineWidth(2)
+              .circle(centerX, centerY, radius)
+              .stroke()
+          } else {
+            doc
+              .strokeColor(borderGray)
+              .lineWidth(1)
+              .circle(centerX, centerY, radius)
+              .stroke()
+          }
 
           // Farbname unter der Box
           doc
-            .fontSize(9)
+            .fontSize(6)
             .fillColor('#666666')
             .font('Helvetica')
             .text(color.name, colorX, colorY + colorBoxSize + 4, {
@@ -474,89 +663,9 @@ async function generatePdfWithPdfKit(
         doc.moveDown(0.5)
       }
 
-      // Größen
-      if (product.sizes && product.sizes.length > 0) {
-        doc
-          .fontSize(12)
-          .fillColor(textColor)
-          .font('Helvetica-Bold')
-          .text('Verfügbare Größen:', { align: 'left' })
-          .moveDown(0.3)
-
-        const sizeChipHeight = 20
-        const sizeChipPadding = 8
-        let sizeX = 40
-        let sizeY = doc.y
-        const maxSizesPerRow = 8
-        let sizesInRow = 0
-
-        product.sizes.forEach((size) => {
-          if (sizesInRow >= maxSizesPerRow) {
-            sizeX = 40
-            sizeY += sizeChipHeight + 5
-            sizesInRow = 0
-          }
-
-          const sizeTextWidth = doc.widthOfString(size, { fontSize: 10 }) + sizeChipPadding * 2
-
-          // Größen-Chip zeichnen
-          doc
-            .roundedRect(sizeX, sizeY, sizeTextWidth, sizeChipHeight, 4)
-            .fillColor(lightGray)
-            .fill()
-            .strokeColor(borderGray)
-            .lineWidth(1)
-            .roundedRect(sizeX, sizeY, sizeTextWidth, sizeChipHeight, 4)
-            .stroke()
-
-          // Größen-Text
-          doc
-            .fontSize(10)
-            .fillColor(textColor)
-            .font('Helvetica')
-            .text(size, sizeX + sizeChipPadding, sizeY + 5, {
-              width: sizeTextWidth - sizeChipPadding * 2,
-              align: 'center',
-            })
-
-          sizeX += sizeTextWidth + 5
-          sizesInRow++
-        })
-
-        // Setze Y-Position nach Größen
-        doc.y = sizeY + sizeChipHeight + 10
-        doc.moveDown(0.5)
-      }
-
-      // Preis-Box
-      const priceBoxY = doc.y
-      doc
-        .roundedRect(40, priceBoxY, 515, 60, 4)
-        .fillColor('#f8f9fa')
-        .fill()
-        .strokeColor(borderGray)
-        .lineWidth(1)
-        .roundedRect(40, priceBoxY, 515, 60, 4)
-        .stroke()
-
-      doc
-        .fontSize(11)
-        .fillColor('#666666')
-        .font('Helvetica')
-        .text('Verkaufspreis (inkl. MwSt.)', 40, priceBoxY + 10, {
-          width: 515,
-          align: 'left',
-        })
-
-      const priceText = `${product.price.toFixed(2)} €`
-      doc
-        .fontSize(28)
-        .fillColor(primaryColor)
-        .font('Helvetica-Bold')
-        .text(priceText, 40, priceBoxY + 25, {
-          width: 515,
-          align: 'left',
-        })
+      // Unterkante der zweispaltigen Sektion
+      const sectionBottomY = Math.max(doc.y, previewBoxY + previewBoxHeight)
+      doc.y = sectionBottomY + 10
 
       // Footer auf jeder Seite
       const footerY = 750
