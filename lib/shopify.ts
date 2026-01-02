@@ -29,6 +29,7 @@ export interface ShopifyProductVariant {
   color_hex?: string | null
   additional_price: number
   sku?: string | null
+  id?: string
 }
 
 export interface ShopifyCreateProductResponse {
@@ -263,5 +264,34 @@ export function convertProductToShopify(
   }
 
   return shopifyProduct
+}
+
+/**
+ * Normalisiert eine Varianten-Row aus der DB in ein konsistentes Format.
+ */
+export function normalizeVariant(variant: any): ShopifyProductVariant {
+  return {
+    id: variant?.id,
+    name: typeof variant?.name === 'string' ? variant.name : '',
+    color_name: typeof variant?.color_name === 'string' ? variant.color_name : null,
+    color_hex: typeof variant?.color_hex === 'string' ? variant.color_hex : null,
+    additional_price: typeof variant?.additional_price === 'number'
+      ? variant.additional_price
+      : parseFloat(variant?.additional_price) || 0,
+    sku: typeof variant?.sku === 'string' ? variant.sku : null,
+  }
+}
+
+/**
+ * Wrapper, der aktuell das normale Produkt-Create nutzt.
+ * Bilder werden im bestehenden Mutation-Flow verarbeitet.
+ */
+export async function createShopifyProductWithImages(
+  shopDomain: string,
+  accessToken: string,
+  productInput: ShopifyProductInput & { images?: Array<{ src: string; altText?: string }> }
+) {
+  // Der vorhandene createShopifyProduct-Mutation unterstützt bereits Images im Input
+  return createShopifyProduct(shopDomain, accessToken, productInput)
 }
 

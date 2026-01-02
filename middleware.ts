@@ -13,6 +13,9 @@ const ignoredRoutes = [
 ]
 
 export async function middleware(req: NextRequest) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'middleware.ts:15',message:'Middleware entry',data:{pathname:req.nextUrl.pathname,hasUrl:!!process.env.NEXT_PUBLIC_SUPABASE_URL,hasAnonKey:!!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
   const pathname = req.nextUrl.pathname
   const searchParams = req.nextUrl.searchParams
   const hasRsc = searchParams.has('_rsc')
@@ -47,6 +50,9 @@ export async function middleware(req: NextRequest) {
   })
 
   try {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'middleware.ts:49',message:'Creating supabase client in middleware',data:{urlLength:process.env.NEXT_PUBLIC_SUPABASE_URL?.length||0,keyLength:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     // Create Supabase client using the new @supabase/ssr package
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,9 +76,15 @@ export async function middleware(req: NextRequest) {
         },
       }
     )
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'middleware.ts:75',message:'Getting user session',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
 
     // Get the current session
     const { data: { user } } = await supabase.auth.getUser()
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'middleware.ts:76',message:'Got user session',data:{hasUser:!!user,userId:user?.id?.substring(0,8)||'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
 
     // If no user, redirect to login
     if (!user) {
@@ -112,6 +124,9 @@ export async function middleware(req: NextRequest) {
     // Return the response
     return res
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'middleware.ts:114',message:'Middleware error caught',data:{errorMessage:error instanceof Error?error.message:String(error),errorName:error instanceof Error?error.name:'unknown',stack:error instanceof Error?error.stack?.substring(0,200):'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     // If there's an error in middleware, log it and allow the request through
     // This prevents middleware errors from blocking all requests
     console.error('Middleware error:', error)

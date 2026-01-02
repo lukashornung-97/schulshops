@@ -62,6 +62,7 @@ export async function PATCH(
     if (body.available_colors !== undefined) updateData.available_colors = body.available_colors
     if (body.available_sizes !== undefined) updateData.available_sizes = body.available_sizes
     if (body.image_url !== undefined) updateData.image_url = body.image_url
+    if (body.description !== undefined) updateData.description = body.description
     if (body.active !== undefined) updateData.active = body.active
 
     const { data, error } = await supabaseAdmin

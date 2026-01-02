@@ -9,3 +9,4 @@ ALTER TABLE public.print_method_costs
 COMMENT ON COLUMN public.print_method_costs.cost_per_unit IS 'Veraltet: Nicht mehr verwendet. Verwenden Sie cost_50_units und cost_100_units.';
 
 
+

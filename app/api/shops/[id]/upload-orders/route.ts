@@ -82,7 +82,7 @@ function excelDateToISO(dateValue: any): string | null {
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
     const shopId = params.id

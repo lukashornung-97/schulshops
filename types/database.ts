@@ -334,6 +334,7 @@ export interface Database {
           available_colors: string[] | null
           available_sizes: string[] | null
           image_url: string | null
+          description: string | null
           active: boolean
           created_at: string
           updated_at: string
@@ -347,6 +348,7 @@ export interface Database {
           available_colors?: string[] | null
           available_sizes?: string[] | null
           image_url?: string | null
+          description?: string | null
           active?: boolean
           created_at?: string
           updated_at?: string
@@ -360,6 +362,7 @@ export interface Database {
           available_colors?: string[] | null
           available_sizes?: string[] | null
           image_url?: string | null
+          description?: string | null
           active?: boolean
           created_at?: string
           updated_at?: string

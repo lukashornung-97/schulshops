@@ -34,3 +34,4 @@ comment on column public.schools.status is 'Status der Schule: lead (Lead), acti
 
 
 
+

@@ -57,6 +57,9 @@ async function checkAndCloseExpiredShops(shops: Shop[]): Promise<void> {
 }
 
 export default function Home() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/de14b646-6048-4a0f-a797-a9f88a9d0d8e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/page.tsx:59',message:'Home page component mounting',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'startup',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
   const [schools, setSchools] = useState<SchoolWithShops[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState(0)

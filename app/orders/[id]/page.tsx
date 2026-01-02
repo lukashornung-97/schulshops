@@ -302,7 +302,7 @@ export default function OrderDetailPage() {
 
   return (
     <Box sx={{ minHeight: '100vh', background: '#f8fafc' }}>
-      }}>
+      
       <Container maxWidth="xl" sx={{ py: 6 }}>
         {/* Header */}
         <Box sx={{ mb: 4, display: 'flex', alignItems: 'center', gap: 2 }}>

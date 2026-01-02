@@ -18,3 +18,4 @@ COMMENT ON COLUMN public.textile_catalog.available_colors IS 'Farben aus CSV (pr
 COMMENT ON COLUMN public.textile_catalog.available_sizes IS 'Größen aus CSV (produktgrößen als JSON-Array)';
 
 
+

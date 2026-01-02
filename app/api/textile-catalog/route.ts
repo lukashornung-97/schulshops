@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
       available_colors,
       available_sizes,
       image_url,
+      description,
       active = true,
     } = body
 
@@ -83,6 +84,7 @@ export async function POST(request: NextRequest) {
         available_colors: available_colors || [],
         available_sizes: available_sizes || [],
         image_url: image_url || null,
+        description: description || null,
         active,
       })
       .select()

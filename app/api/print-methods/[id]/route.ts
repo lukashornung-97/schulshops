@@ -8,7 +8,7 @@ import { getCurrentAdmin } from '@/lib/supabase-server'
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
     const admin = await getCurrentAdmin()
@@ -57,7 +57,7 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
     const admin = await getCurrentAdmin()
@@ -90,5 +90,6 @@ export async function DELETE(
     )
     }
 }
+
 
 

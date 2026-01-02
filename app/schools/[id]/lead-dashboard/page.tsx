@@ -35,6 +35,7 @@ export default function LeadDashboardPage() {
     message: '',
     severity: 'success',
   })
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (params.id) {
@@ -73,6 +74,29 @@ export default function LeadDashboardPage() {
 
       if (response.ok && data.config) {
         setConfig(data.config)
+        
+        // Wenn Config approved ist, lade PDF-URL
+        if (data.config.status === 'approved' && data.config.id) {
+          try {
+            const pdfListResponse = await fetch(`/api/storage/list-print-files?folder=lead-configs/${data.config.id}`)
+            const pdfListData = await pdfListResponse.json()
+            
+            if (pdfListResponse.ok && pdfListData.files && pdfListData.files.length > 0) {
+              // Finde das neueste PDF
+              const pdfFiles = pdfListData.files.filter((f: any) => f.name.endsWith('.pdf'))
+              if (pdfFiles.length > 0) {
+                // Sortiere nach created_at und nimm das neueste
+                pdfFiles.sort((a: any, b: any) => 
+                  new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                )
+                setPdfUrl(pdfFiles[0].url)
+              }
+            }
+          } catch (pdfError) {
+            console.error('Error loading PDF URL:', pdfError)
+            // Nicht kritisch, einfach weiter
+          }
+        }
       }
     } catch (error: any) {
       console.error('Error loading config:', error)
@@ -241,21 +265,36 @@ export default function LeadDashboardPage() {
                 {config?.status === 'approved' ? (
                   <>
                     <Alert severity="success" sx={{ mb: 2 }}>
-                      Ihre Konfiguration wurde bestätigt. Der Shop wurde erstellt.
+                      Ihre Konfiguration wurde bestätigt. Das PDF-Angebotsdokument wurde erstellt.
                     </Alert>
-                    {config?.shop_id && (
-                      <Button
-                        variant="contained"
-                        onClick={() => router.push(`/shops/${config.shop_id}`)}
-                      >
-                        Zum Shop
-                      </Button>
-                    )}
+                    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                      {pdfUrl && (
+                        <Button
+                          variant="contained"
+                          color="primary"
+                          href={pdfUrl}
+                          target="_blank"
+                          download
+                          sx={{ textTransform: 'none' }}
+                        >
+                          PDF-Angebot herunterladen
+                        </Button>
+                      )}
+                      {config?.shop_id && (
+                        <Button
+                          variant="outlined"
+                          onClick={() => router.push(`/shops/${config.shop_id}`)}
+                          sx={{ textTransform: 'none' }}
+                        >
+                          Zum Shop
+                        </Button>
+                      )}
+                    </Box>
                   </>
                 ) : (
                   <>
                     <Alert severity="info" sx={{ mb: 2 }}>
-                      Überprüfen Sie alle Bereiche und bestätigen Sie die Konfiguration. Der Shop wird automatisch erstellt.
+                      Überprüfen Sie alle Bereiche und erstellen Sie das PDF-Angebotsdokument für Ihren Kunden.
                     </Alert>
                     <Button
                       variant="contained"
@@ -278,21 +317,26 @@ export default function LeadDashboardPage() {
                           const data = await response.json()
 
                           if (!response.ok) {
-                            throw new Error(data.error || 'Fehler bei der Bestätigung')
+                            throw new Error(data.error || 'Fehler bei der PDF-Generierung')
                           }
 
-                          // Lade Config neu, um den aktualisierten Status und shop_id zu erhalten
+                          // Speichere PDF-URL
+                          if (data.pdfUrl) {
+                            setPdfUrl(data.pdfUrl)
+                          }
+
+                          // Lade Config neu, um den aktualisierten Status zu erhalten
                           await loadConfig()
 
                           setSnackbar({
                             open: true,
-                            message: 'Konfiguration erfolgreich bestätigt. Der Shop wurde erstellt.',
+                            message: 'PDF-Angebotsdokument erfolgreich erstellt.',
                             severity: 'success',
                           })
                         } catch (error: any) {
                           setSnackbar({
                             open: true,
-                            message: error.message || 'Fehler bei der Bestätigung',
+                            message: error.message || 'Fehler bei der PDF-Generierung',
                             severity: 'error',
                           })
                         } finally {
@@ -300,8 +344,9 @@ export default function LeadDashboardPage() {
                         }
                       }}
                       disabled={saving || !config?.id}
+                      sx={{ textTransform: 'none' }}
                     >
-                      {saving ? <CircularProgress size={20} /> : 'Konfiguration bestätigen'}
+                      {saving ? <CircularProgress size={20} /> : 'PDF-Angebot erstellen'}
                     </Button>
                   </>
                 )}

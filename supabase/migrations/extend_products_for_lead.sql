@@ -27,3 +27,4 @@ COMMENT ON COLUMN public.products.calculated_ek_netto IS 'Berechneter Einkaufspr
 COMMENT ON COLUMN public.products.calculated_vk_brutto IS 'Berechneter Verkaufspreis Brutto';
 
 
+

@@ -68,3 +68,4 @@ Nach erfolgreicher Migration können Sie:
 - Führen Sie die Update-Migration `update_textile_catalog_for_csv.sql` aus.
 
 
+

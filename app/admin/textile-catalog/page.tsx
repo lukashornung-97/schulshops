@@ -61,8 +61,10 @@ export default function TextileCatalogPage() {
     available_colors: [] as string[],
     available_sizes: [] as string[],
     image_url: '',
+    description: '',
     active: true,
   })
+  const [loadingFromLshop, setLoadingFromLshop] = useState(false)
   const [colorInput, setColorInput] = useState('')
   const [sizeInput, setSizeInput] = useState('')
   const [importing, setImporting] = useState(false)
@@ -104,6 +106,7 @@ export default function TextileCatalogPage() {
         available_colors: textile.available_colors || [],
         available_sizes: textile.available_sizes || [],
         image_url: textile.image_url || '',
+        description: textile.description || '',
         active: textile.active,
       })
     } else {
@@ -116,6 +119,7 @@ export default function TextileCatalogPage() {
         available_colors: [],
         available_sizes: [],
         image_url: '',
+        description: '',
         active: true,
       })
     }
@@ -163,6 +167,76 @@ export default function TextileCatalogPage() {
     })
   }
 
+  const handleLoadFromLshop = async () => {
+    if (!editingTextile) {
+      setSnackbar({
+        open: true,
+        message: 'Bitte speichern Sie zuerst das Textil',
+        severity: 'error',
+      })
+      return
+    }
+
+    if (!formData.brand) {
+      setSnackbar({
+        open: true,
+        message: 'Bitte geben Sie zuerst eine Marke/Artikelnummer ein',
+        severity: 'error',
+      })
+      return
+    }
+
+    setLoadingFromLshop(true)
+    try {
+      const response = await fetch('/api/textile-catalog/fetch-from-lshop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          textile_id: editingTextile.id,
+          article_code: formData.brand, // Verwende brand als article_code
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Fehler beim Laden von l-shop-team.de')
+      }
+
+      if (data.success && data.fetched) {
+        // Aktualisiere Formular mit geladenen Daten
+        setFormData({
+          ...formData,
+          image_url: data.fetched.image_url || formData.image_url,
+          description: data.fetched.description || formData.description,
+        })
+
+        setSnackbar({
+          open: true,
+          message: 'Daten erfolgreich von l-shop-team.de geladen',
+          severity: 'success',
+        })
+
+        // Lade Textilien neu, um aktualisierte Daten zu erhalten
+        await fetchTextiles()
+      } else {
+        setSnackbar({
+          open: true,
+          message: data.message || 'Keine Daten gefunden',
+          severity: 'warning',
+        })
+      }
+    } catch (err: any) {
+      setSnackbar({
+        open: true,
+        message: err.message || 'Fehler beim Laden von l-shop-team.de',
+        severity: 'error',
+      })
+    } finally {
+      setLoadingFromLshop(false)
+    }
+  }
+
   const handleSave = async () => {
     if (!formData.name.trim()) {
       setSnackbar({
@@ -192,6 +266,7 @@ export default function TextileCatalogPage() {
             available_colors: formData.available_colors,
             available_sizes: formData.available_sizes,
             image_url: formData.image_url || null,
+            description: formData.description || null,
             active: formData.active,
           }),
       })
@@ -556,6 +631,31 @@ export default function TextileCatalogPage() {
                 onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
                 placeholder="https://..."
               />
+            </Grid>
+            <Grid item xs={12}>
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                <TextField
+                  fullWidth
+                  label="Produktbeschreibung"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  multiline
+                  rows={4}
+                  placeholder="Produktbeschreibung..."
+                  helperText="Beschreibung des Textils, kann von l-shop-team.de geladen werden"
+                />
+                {editingTextile && formData.brand && (
+                  <Button
+                    variant="outlined"
+                    onClick={handleLoadFromLshop}
+                    disabled={loadingFromLshop}
+                    sx={{ mt: 1, whiteSpace: 'nowrap' }}
+                    startIcon={loadingFromLshop ? <CircularProgress size={16} /> : null}
+                  >
+                    {loadingFromLshop ? 'Lädt...' : 'Von l-shop-team.de laden'}
+                  </Button>
+                )}
+              </Box>
             </Grid>
             <Grid item xs={12}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>

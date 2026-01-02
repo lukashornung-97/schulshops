@@ -4,7 +4,7 @@ import { getCurrentUser } from '@/lib/supabase-server'
 
 /**
  * POST /api/lead-config/[id]/confirm
- * Bestätigt eine Lead-Konfiguration und stellt sicher, dass ein Shop existiert
+ * Bestätigt eine Lead-Konfiguration und generiert ein PDF-Angebotsdokument
  * Wird direkt nach der Bestätigung im Lead Dashboard aufgerufen
  */
 export async function POST(
@@ -59,24 +59,24 @@ export async function POST(
       )
     }
 
-    // Lade Schuldaten für Shop-Erstellung
-    const { data: school, error: schoolError } = await supabaseAdmin
-      .from('schools')
-      .select('id, name, short_code')
-      .eq('id', config.school_id)
-      .single()
-
-    if (schoolError || !school) {
-      return NextResponse.json(
-        { error: 'Schule nicht gefunden' },
-        { status: 404 }
-      )
-    }
-
-    // Prüfe ob bereits ein Shop existiert
+    // Stelle sicher, dass ein Shop existiert (für Produktdaten)
     let shopId = config.shop_id
 
     if (!shopId) {
+      // Lade Schuldaten für Shop-Erstellung
+      const { data: school, error: schoolError } = await supabaseAdmin
+        .from('schools')
+        .select('id, name, short_code')
+        .eq('id', config.school_id)
+        .single()
+
+      if (schoolError || !school) {
+        return NextResponse.json(
+          { error: 'Schule nicht gefunden' },
+          { status: 404 }
+        )
+      }
+
       // Erstelle Shop falls noch nicht vorhanden
       const shopName = school.name || 'Shop'
       const shopSlug = `${school?.short_code || shopName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`
@@ -104,7 +104,44 @@ export async function POST(
       }
 
       shopId = shop.id
+
+      // Speichere shop_id sofort, damit der PDF-Endpoint darauf zugreifen kann
+      const { error: updateShopIdError } = await supabaseAdmin
+        .from('lead_configurations')
+        .update({ shop_id: shopId })
+        .eq('id', configId)
+
+      if (updateShopIdError) {
+        console.error('Error updating config with shop_id:', updateShopIdError)
+        return NextResponse.json(
+          { error: 'Fehler beim Aktualisieren der Konfiguration mit Shop' },
+          { status: 500 }
+        )
+      }
+
+      // Aktualisiere lokale Config-Referenz
+      ;(config as any).shop_id = shopId
     }
+
+    // Generiere PDF-Angebotsdokument
+    const baseUrl = request.nextUrl.origin
+    const pdfResponse = await fetch(`${baseUrl}/api/lead-config/${configId}/generate-pdf`, {
+      method: 'POST',
+      headers: {
+        'Cookie': request.headers.get('Cookie') || '',
+      },
+    })
+
+    if (!pdfResponse.ok) {
+      const pdfError = await pdfResponse.json()
+      console.error('Error generating PDF:', pdfError)
+      return NextResponse.json(
+        { error: pdfError.error || 'Fehler beim Generieren des PDFs' },
+        { status: 500 }
+      )
+    }
+
+    const pdfData = await pdfResponse.json()
 
     // Setze Status auf 'approved' und aktualisiere shop_id falls nötig
     const updateData: any = {
@@ -134,7 +171,9 @@ export async function POST(
       success: true,
       config: updatedConfig,
       shop_id: shopId,
-      message: 'Konfiguration erfolgreich bestätigt',
+      pdfUrl: pdfData.pdfUrl,
+      pdfFileName: pdfData.fileName,
+      message: 'PDF-Angebotsdokument erfolgreich erstellt',
     })
   } catch (error: any) {
     console.error('Error in POST /api/lead-config/[id]/confirm:', error)
