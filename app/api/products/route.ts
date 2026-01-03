@@ -582,6 +582,32 @@ async function updateProductVariants(
   colors: string[],
   sizes: string[]
 ): Promise<void> {
+  const normalizeColorInput = (value: any): string => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      const cleaned = trimmed.replace(/[\r\n]+/g, '')
+      if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(cleaned)
+          if (parsed && typeof parsed.name === 'string') {
+            return parsed.name.trim()
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return cleaned
+    }
+    if (value && typeof value === 'object' && typeof value.name === 'string') {
+      return value.name.trim()
+    }
+    return ''
+  }
+
+  const normalizedColors = colors
+    .map((c) => normalizeColorInput(c))
+    .filter((c) => c.length > 0)
+
   // Lösche alle bestehenden Varianten
   await supabaseAdmin
     .from('product_variants')
@@ -596,9 +622,9 @@ async function updateProductVariants(
     active: boolean
   }> = []
 
-  if (colors.length > 0 && sizes.length > 0) {
+  if (normalizedColors.length > 0 && sizes.length > 0) {
     // Kombiniere Farben und Größen
-    for (const color of colors) {
+    for (const color of normalizedColors) {
       for (const size of sizes) {
         variants.push({
           product_id: productId,
@@ -608,9 +634,9 @@ async function updateProductVariants(
         })
       }
     }
-  } else if (colors.length > 0) {
+  } else if (normalizedColors.length > 0) {
     // Nur Farben
-    for (const color of colors) {
+    for (const color of normalizedColors) {
       variants.push({
         product_id: productId,
         name: 'Standard',

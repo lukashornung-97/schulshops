@@ -37,6 +37,16 @@ type Product = Database['public']['Tables']['products']['Row'] & {
   product_variants?: Array<{ id: string; name: string; color_name: string | null }>
 }
 
+// Hilfsfunktion: Extrahiert Farbnamen aus available_colors (unterstützt sowohl string[] als auch {name, hex}[])
+const extractColorNames = (colors: any[]): string[] => {
+  if (!colors || colors.length === 0) return []
+  return colors.map((color) => {
+    if (typeof color === 'string') return color
+    if (typeof color === 'object' && color !== null && color.name) return color.name
+    return String(color)
+  })
+}
+
 interface PrintFile {
   id: string
   url: string
@@ -618,7 +628,7 @@ export default function TextileSelector({ schoolId, config, onSave, onNext }: Te
                 </Typography>
                 <Autocomplete
                   multiple
-                  options={textiles.find(t => t.id === editingProduct.textile_id)?.available_colors || []}
+                  options={extractColorNames(textiles.find(t => t.id === editingProduct.textile_id)?.available_colors || [])}
                   value={editingProduct.selected_colors}
                   onChange={(_, newValue) => setEditingProduct({
                     ...editingProduct,

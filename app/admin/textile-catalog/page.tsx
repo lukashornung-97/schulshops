@@ -41,6 +41,50 @@ import { Database } from '@/types/database'
 
 type TextileCatalog = Database['public']['Tables']['textile_catalog']['Row']
 
+// Farben-Struktur: { name: string, hex?: string }
+type ColorWithHex = {
+  name: string
+  hex?: string
+}
+
+// Hilfsfunktion: Konvertiert string[] zu ColorWithHex[]
+const normalizeColors = (colors: any[]): ColorWithHex[] => {
+  if (!colors || colors.length === 0) return []
+  return colors.map((color) => {
+    if (typeof color === 'string') {
+      return { name: color }
+    }
+    if (typeof color === 'object' && color !== null) {
+      return {
+        name: color.name || color.toString(),
+        hex: color.hex || color.hex_code || undefined,
+      }
+    }
+    return { name: String(color) }
+  })
+}
+
+// Hilfsfunktion: Konvertiert ColorWithHex[] zu string[] (für Rückwärtskompatibilität)
+const colorsToStringArray = (colors: ColorWithHex[]): string[] => {
+  return colors.map((c) => c.name)
+}
+
+// Hilfsfunktion: Bestimmt Kontrastfarbe (schwarz oder weiß) basierend auf Hintergrundfarbe
+const getContrastColor = (hexColor: string): string => {
+  if (!hexColor || !hexColor.startsWith('#')) return '#000000'
+  
+  // Entferne # und konvertiere zu RGB
+  const r = parseInt(hexColor.slice(1, 3), 16)
+  const g = parseInt(hexColor.slice(3, 5), 16)
+  const b = parseInt(hexColor.slice(5, 7), 16)
+  
+  // Berechne relative Luminanz
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  
+  // Wenn Luminanz > 0.5, verwende schwarzen Text, sonst weißen
+  return luminance > 0.5 ? '#000000' : '#ffffff'
+}
+
 export default function TextileCatalogPage() {
   const [textiles, setTextiles] = useState<TextileCatalog[]>([])
   const [loading, setLoading] = useState(true)
@@ -58,15 +102,16 @@ export default function TextileCatalogPage() {
     brand: '',
     article_number: '',
     base_price: '0',
-    available_colors: [] as string[],
+    available_colors: [] as ColorWithHex[],
     available_sizes: [] as string[],
     image_url: '',
     description: '',
     active: true,
   })
   const [loadingFromLshop, setLoadingFromLshop] = useState(false)
-  const [colorInput, setColorInput] = useState('')
+  const [colorsJson, setColorsJson] = useState('')
   const [sizeInput, setSizeInput] = useState('')
+  const [colorsJsonError, setColorsJsonError] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<{
     success: boolean
@@ -103,7 +148,7 @@ export default function TextileCatalogPage() {
         brand: textile.brand || '',
         article_number: textile.article_number || '',
         base_price: textile.base_price.toString(),
-        available_colors: textile.available_colors || [],
+        available_colors: normalizeColors(textile.available_colors || []),
         available_sizes: textile.available_sizes || [],
         image_url: textile.image_url || '',
         description: textile.description || '',
@@ -124,30 +169,80 @@ export default function TextileCatalogPage() {
       })
     }
     setDialogOpen(true)
+    setSizeInput('')
+    setColorsJsonError(null)
+    // Konvertiere Farben zu JSON-Format für das Textfeld
+    if (textile) {
+      const colorsObj: Record<string, { name: string; hex?: string }> = {}
+      normalizeColors(textile.available_colors || []).forEach((color) => {
+        colorsObj[color.name] = {
+          name: color.name,
+          ...(color.hex && { hex: color.hex }),
+        }
+      })
+      setColorsJson(JSON.stringify(colorsObj, null, 2))
+    } else {
+      setColorsJson('')
+    }
   }
 
   const handleCloseDialog = () => {
     setDialogOpen(false)
     setEditingTextile(null)
-    setColorInput('')
     setSizeInput('')
+    setColorsJson('')
+    setColorsJsonError(null)
   }
 
-  const handleAddColor = () => {
-    if (colorInput.trim() && !formData.available_colors.includes(colorInput.trim())) {
+  const handleColorsJsonChange = (value: string) => {
+    setColorsJson(value)
+    setColorsJsonError(null)
+
+    if (!value.trim()) {
       setFormData({
         ...formData,
-        available_colors: [...formData.available_colors, colorInput.trim()],
+        available_colors: [],
       })
-      setColorInput('')
+      return
     }
-  }
 
-  const handleRemoveColor = (color: string) => {
-    setFormData({
-      ...formData,
-      available_colors: formData.available_colors.filter(c => c !== color),
-    })
+    try {
+      const json = JSON.parse(value)
+      
+      // Erwartetes Format: { "ColorName": { "name": "ColorName", "hex": "#RRGGBB" }, ... }
+      if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+        throw new Error('JSON muss ein Objekt sein (nicht ein Array)')
+      }
+
+      const colors: ColorWithHex[] = []
+      
+      for (const [key, value] of Object.entries(json)) {
+        if (typeof value !== 'object' || value === null) {
+          throw new Error(`Ungültiger Wert für "${key}": Muss ein Objekt sein`)
+        }
+        
+        const colorObj = value as any
+        const colorName = colorObj.name || key
+        
+        // Validiere Hex-Code falls vorhanden
+        if (colorObj.hex && !/^#[0-9A-Fa-f]{6}$/.test(colorObj.hex)) {
+          throw new Error(`Ungültiger Hex-Code für "${colorName}": ${colorObj.hex}. Format: #RRGGBB`)
+        }
+
+        colors.push({
+          name: colorName,
+          hex: colorObj.hex || undefined,
+        })
+      }
+
+      setFormData({
+        ...formData,
+        available_colors: colors,
+      })
+    } catch (error: any) {
+      // Fehler beim Parsen - zeige Fehler, aber behalte den Text
+      setColorsJsonError(error.message || 'Ungültiges JSON-Format')
+    }
   }
 
   const handleAddSize = () => {
@@ -255,6 +350,15 @@ export default function TextileCatalogPage() {
       
       const method = editingTextile ? 'PATCH' : 'POST'
 
+      // Konvertiere Farben für API (behalte Objektstruktur, entferne undefined-Werte)
+      const colorsForApi = formData.available_colors.map(c => {
+        const colorObj: any = { name: c.name }
+        if (c.hex) {
+          colorObj.hex = c.hex
+        }
+        return colorObj
+      })
+
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -263,7 +367,7 @@ export default function TextileCatalogPage() {
             brand: formData.brand || null,
             article_number: formData.article_number || null,
             base_price: formData.base_price ? parseFloat(formData.base_price) : 0,
-            available_colors: formData.available_colors,
+            available_colors: colorsForApi,
             available_sizes: formData.available_sizes,
             image_url: formData.image_url || null,
             description: formData.description || null,
@@ -274,6 +378,7 @@ export default function TextileCatalogPage() {
       const data = await response.json()
 
       if (!response.ok) {
+        console.error('API Error:', data)
         throw new Error(data.error || 'Fehler beim Speichern')
       }
 
@@ -516,11 +621,26 @@ export default function TextileCatalogPage() {
                       <TableCell>{textile.base_price.toFixed(2)} €</TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          {(textile.available_colors || []).slice(0, 3).map((color) => (
-                            <Chip key={color} label={color} size="small" />
-                          ))}
-                          {(textile.available_colors || []).length > 3 && (
-                            <Chip label={`+${(textile.available_colors || []).length - 3}`} size="small" variant="outlined" />
+                          {normalizeColors(textile.available_colors || []).slice(0, 3).map((color) => {
+                            const hexColor = color.hex || '#cccccc'
+                            return (
+                              <Chip
+                                key={color.name}
+                                label={color.name}
+                                size="small"
+                                sx={{
+                                  backgroundColor: hexColor,
+                                  color: getContrastColor(hexColor),
+                                  border: '1px solid rgba(0,0,0,0.1)',
+                                  '& .MuiChip-label': {
+                                    fontWeight: 500,
+                                  },
+                                }}
+                              />
+                            )
+                          })}
+                          {normalizeColors(textile.available_colors || []).length > 3 && (
+                            <Chip label={`+${normalizeColors(textile.available_colors || []).length - 3}`} size="small" variant="outlined" />
                           )}
                         </Box>
                       </TableCell>
@@ -659,36 +779,66 @@ export default function TextileCatalogPage() {
             </Grid>
             <Grid item xs={12}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Verfügbare Farben
+                Verfügbare Farben (JSON)
               </Typography>
-              <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-                {formData.available_colors.map((color) => (
-                  <Chip
-                    key={color}
-                    label={color}
-                    onDelete={() => handleRemoveColor(color)}
-                    size="small"
-                  />
-                ))}
-              </Box>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <TextField
-                  size="small"
-                  placeholder="Farbe hinzufügen"
-                  value={colorInput}
-                  onChange={(e) => setColorInput(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      handleAddColor()
-                    }
-                  }}
-                  sx={{ flexGrow: 1 }}
-                />
-                <Button variant="outlined" onClick={handleAddColor} size="small">
-                  Hinzufügen
-                </Button>
-              </Box>
+              {colorsJsonError && (
+                <Alert severity="error" sx={{ mb: 1 }}>
+                  {colorsJsonError}
+                </Alert>
+              )}
+              <TextField
+                fullWidth
+                multiline
+                rows={8}
+                value={colorsJson}
+                onChange={(e) => handleColorsJsonChange(e.target.value)}
+                placeholder={`{\n  "Red": {\n    "hex": "#db001b",\n    "name": "Red"\n  },\n  "Radiant Purple": {\n    "hex": "#3B1D66",\n    "name": "Radiant Purple"\n  }\n}`}
+                sx={{
+                  fontFamily: 'monospace',
+                  '& .MuiInputBase-input': {
+                    fontFamily: 'monospace',
+                    fontSize: '0.875rem',
+                  },
+                }}
+                helperText='Geben Sie die Farben als JSON-Objekt ein. Format: { "Farbname": { "hex": "#RRGGBB", "name": "Farbname" }, ... }'
+              />
+              {formData.available_colors.length > 0 && (
+                <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                  {formData.available_colors.map((color) => {
+                    const hexColor = color.hex || '#cccccc'
+                    return (
+                      <Chip
+                        key={color.name}
+                        label={
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Box
+                              sx={{
+                                width: 12,
+                                height: 12,
+                                borderRadius: '50%',
+                                backgroundColor: hexColor,
+                                border: '1px solid rgba(0,0,0,0.2)',
+                              }}
+                            />
+                            <span>{color.name}</span>
+                            {color.hex && (
+                              <Typography variant="caption" sx={{ opacity: 0.7, ml: 0.5 }}>
+                                {color.hex}
+                              </Typography>
+                            )}
+                          </Box>
+                        }
+                        size="small"
+                        sx={{
+                          backgroundColor: hexColor,
+                          color: getContrastColor(hexColor),
+                          border: '1px solid rgba(0,0,0,0.1)',
+                        }}
+                      />
+                    )
+                  })}
+                </Box>
+              )}
             </Grid>
             <Grid item xs={12}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>

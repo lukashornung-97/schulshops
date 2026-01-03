@@ -21,6 +21,7 @@ import ShoppingCartIcon from '@mui/icons-material/ShoppingCart'
 import PersonIcon from '@mui/icons-material/Person'
 import LogoutIcon from '@mui/icons-material/Logout'
 import SettingsIcon from '@mui/icons-material/Settings'
+import InventoryIcon from '@mui/icons-material/Inventory'
 import { useAuth } from './AuthProvider'
 
 export function AppBar() {
@@ -217,6 +218,18 @@ export function AppBar() {
               >
                 <SettingsIcon sx={{ mr: 1.5, fontSize: 20 }} />
                 Preisverwaltung
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  handleMenuClose()
+                  router.push('/admin/textile-catalog')
+                }}
+                sx={{
+                  py: 1.5,
+                }}
+              >
+                <InventoryIcon sx={{ mr: 1.5, fontSize: 20 }} />
+                Textilien verwalten
               </MenuItem>
               <Divider />
               <MenuItem

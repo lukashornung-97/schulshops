@@ -124,36 +124,121 @@ export async function POST(
         : product.textile_catalog
       
       // Farben: bevorzugt vollständige Textil-Farbpalette, sonst Varianten
-      const normalizeColorName = (value: any) => {
-        if (typeof value === 'string') return value.trim()
-        if (value && typeof value.name === 'string') return value.name.trim()
-        return ''
-      }
-
       const normalizeColorHex = (value: any): string | null => {
-        if (typeof value === 'string') return value
-        if (value && typeof value.hex === 'string') return value.hex
-        if (value && typeof value.hex_code === 'string') return value.hex_code
+        const normalizeString = (val: string) => {
+          const cleaned = val.replace(/[\r\n]+/g, '').trim()
+          if (!cleaned) return null
+          return cleaned.startsWith('#') ? cleaned : `#${cleaned}`
+        }
+
+        if (typeof value === 'string') return normalizeString(value)
+        if (value && typeof value.hex === 'string') return normalizeString(value.hex)
+        if (value && typeof value.hex_code === 'string') return normalizeString(value.hex_code)
         return null
       }
+
+      const parseColorValue = (value: any): { name: string; hex: string | null } => {
+        // Versucht, Eingaben robust zu normalisieren (Plain-String, JSON-String, verschachtelter Name)
+        const parseMaybeJsonString = (str: string) => {
+          const trimmed = str.trim()
+          const cleaned = trimmed.replace(/[\r\n]+/g, '')
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              return JSON.parse(cleaned)
+            } catch {
+              // Versuch mit Regex-Fallback (erlaubt Zeilenumbrüche und Whitespace)
+              const nameMatch = cleaned.match(/"name"\s*:\s*"([^"]*)"/)
+              const hexMatch = cleaned.match(/"hex"\s*:\s*"([^"]*)"/)
+              if (nameMatch) {
+                return {
+                  name: nameMatch[1],
+                  hex: hexMatch ? hexMatch[1] : null,
+                }
+              }
+              return null
+            }
+          }
+          return null
+        }
+
+        if (typeof value === 'string') {
+          const maybeJson = parseMaybeJsonString(value)
+          if (maybeJson && typeof maybeJson === 'object') {
+            const nameValue =
+              typeof maybeJson.name === 'string'
+                ? maybeJson.name.replace(/[\r\n]+/g, ' ').trim()
+                : ''
+            const hexValue = normalizeColorHex(maybeJson.hex ?? maybeJson.hex_code ?? null)
+            return { name: nameValue, hex: hexValue }
+          }
+          const trimmed = value.trim()
+          const cleanedName = trimmed.replace(/[\r\n]+/g, ' ')
+          return {
+            name: cleanedName,
+            hex: normalizeColorHex(cleanedName),
+          }
+        }
+
+        if (value && typeof value === 'object') {
+          // Falls name selbst ein JSON-String ist, ebenfalls parsen
+          if (typeof value.name === 'string') {
+            const nested = parseColorValue(value.name)
+            return {
+              name: nested.name.replace(/[\r\n]+/g, ' ').trim(),
+              hex: normalizeColorHex(value.hex ?? value.hex_code ?? nested.hex),
+            }
+          }
+
+          return {
+            name:
+              typeof value.name === 'string'
+                ? value.name.replace(/[\r\n]+/g, ' ').trim()
+                : '',
+            hex: normalizeColorHex(value.hex ?? value.hex_code ?? null),
+          }
+        }
+
+        return { name: '', hex: null }
+      }
+
+      const normalizeColorName = (value: any) => parseColorValue(value).name
 
       const textileAvailableColors = Array.isArray(textile?.available_colors)
         ? textile.available_colors
         : []
 
       const normalizedAvailableColors = textileAvailableColors
-        .map((c: any) => ({
-          name: normalizeColorName(c),
-          hex: normalizeColorHex(c),
-        }))
+        .map((c: any) => parseColorValue(c))
         .filter((c: { name: string; hex: string | null }) => c.name.length > 0)
 
+      const availableColorMap = new Map<string, { name: string; hex: string | null }>(
+        normalizedAvailableColors.map((c: { name: string; hex: string | null }) => [
+          c.name.toLowerCase(),
+          c,
+        ])
+      )
+
       // Falls keine Textilfarben vorhanden, nutze Variantenfarben
-      const fallbackVariantColors = [...new Set(
-        variants
-          .map((v: any) => (typeof v.color_name === 'string' ? v.color_name.trim() : ''))
-          .filter((c: string): c is string => c.length > 0)
-      )].map((name) => ({ name, hex: null as string | null }))
+      // Erstelle Map von Farbname zu Hex-Wert aus Varianten
+      const variantColorHexMap = new Map<string, string | null>()
+      variants.forEach((v: any) => {
+        const parsed = parseColorValue(v.color_name)
+        if (parsed.name) {
+          // Bevorzuge color_hex aus Variante, sonst geparsten Hex-Wert
+          const hexFromVariant = v.color_hex 
+            ? normalizeColorHex(v.color_hex) 
+            : parsed.hex
+          // Nur setzen wenn noch nicht vorhanden oder wenn wir einen Hex-Wert haben
+          if (!variantColorHexMap.has(parsed.name) || hexFromVariant) {
+            variantColorHexMap.set(parsed.name, hexFromVariant || variantColorHexMap.get(parsed.name) || null)
+          }
+        }
+      })
+
+      const fallbackVariantColors = Array.from(variantColorHexMap.entries()).map(([name, hex]) => ({
+        name,
+        hex,
+      }))
 
       const colorsSource = normalizedAvailableColors.length > 0
         ? normalizedAvailableColors
@@ -161,7 +246,7 @@ export async function POST(
 
       const variantColorSet = new Set(
         variants
-          .map((v: any) => (typeof v.color_name === 'string' ? v.color_name.trim() : ''))
+          .map((v: any) => parseColorValue(v.color_name).name)
           .filter((c: string) => c.length > 0)
       )
 
@@ -190,50 +275,74 @@ export async function POST(
         ),
       ]
 
-      // Finde Bild: zuerst Druckvorschau, dann Textilbild, dann Standard
-      let imageUrl: string | null = null
+      // Sammle alle Druckvorschauen (max. 3)
+      const previewUrls: string[] = []
       const printConfig = product.print_config as any
       
       // Prüfe auf Druckvorschauen
       if (printConfig) {
-        // Versuche Vorschau von erster Farbe zu nehmen
-        const firstColor = colors[0]
-        if (firstColor) {
-          if (printConfig.front?.previews?.[firstColor]?.[0]?.url) {
-            imageUrl = printConfig.front.previews[firstColor][0].url
-          } else if (printConfig.back?.previews?.[firstColor]?.[0]?.url) {
-            imageUrl = printConfig.back.previews[firstColor][0].url
-          } else if (printConfig.side?.previews?.[firstColor]?.[0]?.url) {
-            imageUrl = printConfig.side.previews[firstColor][0].url
+        const positions: Array<'front' | 'back' | 'side'> = ['front', 'back', 'side']
+        for (const pos of positions) {
+          const previewsForPos = printConfig[pos]?.previews
+          if (previewsForPos && typeof previewsForPos === 'object') {
+            const colorKeys = Object.keys(previewsForPos)
+            for (const colorKey of colorKeys) {
+              const previewArr = previewsForPos[colorKey]
+              if (Array.isArray(previewArr)) {
+                for (const preview of previewArr) {
+                  if (preview?.url && previewUrls.length < 3) {
+                    previewUrls.push(preview.url)
+                  }
+                }
+              }
+              if (previewUrls.length >= 3) break
+            }
           }
+          if (previewUrls.length >= 3) break
         }
       }
 
-      // Fallback: Textilbild
-      if (!imageUrl && textile?.image_url && typeof textile.image_url === 'string') {
-        imageUrl = textile.image_url
+      // Fallback: Textilbild (nur wenn keine Vorschauen vorhanden)
+      if (previewUrls.length === 0 && textile?.image_url && typeof textile.image_url === 'string') {
+        previewUrls.push(textile.image_url)
       }
+
+      // Für Rückwärtskompatibilität: erste URL als imageUrl
+      const imageUrl = previewUrls.length > 0 ? previewUrls[0] : null
 
       // Erstelle Farb-Info mit Hex-Werten: bevorzugt Textilfarben mit Hex, sonst Varianten-Hex
       const colorInfo = colorsSource.map((c: { name: string; hex?: string | null }) => {
-        let hexValue = normalizeColorHex(c.hex)
+        // Stelle sicher, dass c.name kein JSON-String ist
+        const parsedCName = parseColorValue(c.name)
+        const cleanCName = parsedCName.name || c.name
+        
+        const colorKey = typeof cleanCName === 'string' ? cleanCName.toLowerCase() : ''
+        const colorFromJson = colorKey ? availableColorMap.get(colorKey) : undefined
+        const displayName = (colorFromJson?.name || cleanCName || '').trim()
+
+        let hexValue = normalizeColorHex(colorFromJson?.hex ?? c.hex ?? parsedCName.hex)
 
         // Fallback: finde Hex aus Varianten, wenn nicht vorhanden
         if (!hexValue) {
-          const variant = variants.find(
-            (v: any) =>
-              typeof v.color_name === 'string' &&
-              v.color_name.trim() === c.name
-          )
+          const variant = variants.find((v: any) => {
+            const parsed = parseColorValue(v.color_name)
+            return parsed.name === displayName || parsed.name === cleanCName
+          })
           if (variant?.color_hex && typeof variant.color_hex === 'string') {
-            hexValue = variant.color_hex
+            hexValue = normalizeColorHex(variant.color_hex)
+          } else if (variant) {
+            // Versuche Hex aus geparstem color_name zu holen
+            const variantParsed = parseColorValue(variant.color_name)
+            if (variantParsed.hex) {
+              hexValue = variantParsed.hex
+            }
           }
         }
 
         return {
-          name: c.name,
+          name: displayName,
           hex: hexValue,
-          selected: variantColorSet.has(c.name),
+          selected: variantColorSet.has(displayName) || variantColorSet.has(cleanCName),
         }
       })
 
@@ -257,6 +366,7 @@ export async function POST(
         name: safeName,
         description: safeDescription,
         imageUrl: imageUrl,
+        previewUrls: previewUrls,
         colors: colorInfo,
         sizes: sizes,
         price: safePrice,
@@ -340,6 +450,7 @@ async function generatePdfWithPdfKit(
     name: string
     description?: string | null
     imageUrl?: string | null
+    previewUrls?: string[]
     colors: Array<{ name: string; hex?: string | null; selected?: boolean }>
     sizes: string[]
     price: number
@@ -352,20 +463,22 @@ async function generatePdfWithPdfKit(
   const PDFDocument = require('pdfkit')
 
   // Lade alle Bilder im Voraus
-  const productImages: Map<number, Buffer | null> = new Map()
+  const productImages: Map<number, Buffer[]> = new Map()
   await Promise.all(
     products.map(async (product, index) => {
-      if (product.imageUrl) {
+      const previewUrls = product.previewUrls || (product.imageUrl ? [product.imageUrl] : [])
+      const imageBuffers: Buffer[] = []
+      
+      for (const url of previewUrls) {
         try {
-          const imageBuffer = await fetchImageAsBuffer(product.imageUrl)
-          productImages.set(index, imageBuffer)
+          const imageBuffer = await fetchImageAsBuffer(url)
+          imageBuffers.push(imageBuffer)
         } catch (error) {
-          console.warn(`Could not load image for product ${product.name}:`, error)
-          productImages.set(index, null)
+          console.warn(`Could not load image ${url} for product ${product.name}:`, error)
         }
-      } else {
-        productImages.set(index, null)
       }
+      
+      productImages.set(index, imageBuffers)
     })
   )
 
@@ -443,43 +556,40 @@ async function generatePdfWithPdfKit(
       // Ausgangsposition für zweispaltiges Layout
       const sectionTopY = doc.y
 
-      // Vorschaubild rechts in einem Kasten
-      const previewBoxY = sectionTopY
-      doc
-        .roundedRect(
-          rightColumnX,
-          previewBoxY,
-          previewBoxWidth,
-          previewBoxHeight,
-          6
-        )
-        .fillColor('#fafafa')
-        .fill()
-        .strokeColor(borderGray)
-        .lineWidth(1)
-        .roundedRect(
-          rightColumnX,
-          previewBoxY,
-          previewBoxWidth,
-          previewBoxHeight,
-          6
-        )
-        .stroke()
-
-      // Produktbild (falls vorhanden) in der Box anzeigen
-      const imageBuffer = productImages.get(index)
-      if (imageBuffer) {
-        try {
-          doc.image(imageBuffer, rightColumnX + 6, previewBoxY + 6, {
-            fit: [previewBoxWidth - 12, previewBoxHeight - 12],
-            align: 'center',
-            valign: 'center',
-          })
-        } catch (error) {
-          console.warn(`Could not add image to PDF for product ${product.name}:`, error)
-          // Weiter ohne Bild
-        }
-      } else {
+      // Vorschaubilder rechts in Kästen
+      const previewImages = productImages.get(index) || []
+      const numPreviews = Math.min(previewImages.length, 3)
+      
+      // Variablen für sectionBottomY Berechnung
+      let previewBoxY = sectionTopY
+      let actualPreviewHeight = previewBoxHeight
+      
+      if (numPreviews === 0) {
+        // Keine Vorschau verfügbar
+        const squareHeight = previewBoxWidth // Quadratisch
+        actualPreviewHeight = squareHeight
+        
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY,
+            previewBoxWidth,
+            squareHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY,
+            previewBoxWidth,
+            squareHeight,
+            6
+          )
+          .stroke()
+        
         doc
           .fontSize(10)
           .fillColor('#999999')
@@ -487,19 +597,241 @@ async function generatePdfWithPdfKit(
           .text(
             'Keine Vorschau verfügbar',
             rightColumnX + 10,
-            previewBoxY + previewBoxHeight / 2 - 5,
+            previewBoxY + squareHeight / 2 - 5,
             {
               width: previewBoxWidth - 20,
               align: 'center',
             }
           )
+      } else if (numPreviews === 1) {
+        // Eine Vorschau: quadratisch
+        const squareHeight = previewBoxWidth // Quadratisch
+        actualPreviewHeight = squareHeight
+        
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY,
+            previewBoxWidth,
+            squareHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY,
+            previewBoxWidth,
+            squareHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[0], rightColumnX + 6, previewBoxY + 6, {
+            fit: [previewBoxWidth - 12, squareHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add image to PDF for product ${product.name}:`, error)
+        }
+      } else if (numPreviews === 2) {
+        // Zwei Vorschauen: untereinander, quadratisch
+        const gap = 10
+        const singlePreviewHeight = previewBoxWidth // Quadratisch
+        const previewBoxY1 = sectionTopY
+        const previewBoxY2 = previewBoxY1 + singlePreviewHeight + gap
+        actualPreviewHeight = singlePreviewHeight * 2 + gap // Gesamthöhe für 2 quadratische Boxen
+
+        // Erste Vorschau
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY1,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY1,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[0], rightColumnX + 6, previewBoxY1 + 6, {
+            fit: [previewBoxWidth - 12, singlePreviewHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add first preview image:`, error)
+        }
+
+        // Zweite Vorschau
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY2,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY2,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[1], rightColumnX + 6, previewBoxY2 + 6, {
+            fit: [previewBoxWidth - 12, singlePreviewHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add second preview image:`, error)
+        }
+      } else if (numPreviews === 3) {
+        // Drei Vorschauen: untereinander, quadratisch
+        const gap = 10
+        const singlePreviewHeight = previewBoxWidth // Quadratisch
+        const previewBoxY1 = sectionTopY
+        const previewBoxY2 = previewBoxY1 + singlePreviewHeight + gap
+        const previewBoxY3 = previewBoxY2 + singlePreviewHeight + gap
+        actualPreviewHeight = singlePreviewHeight * 3 + gap * 2 // Gesamthöhe für 3 quadratische Boxen
+
+        // Erste Vorschau
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY1,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY1,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[0], rightColumnX + 6, previewBoxY1 + 6, {
+            fit: [previewBoxWidth - 12, singlePreviewHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add first preview image:`, error)
+        }
+
+        // Zweite Vorschau
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY2,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY2,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[1], rightColumnX + 6, previewBoxY2 + 6, {
+            fit: [previewBoxWidth - 12, singlePreviewHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add second preview image:`, error)
+        }
+
+        // Dritte Vorschau
+        doc
+          .roundedRect(
+            rightColumnX,
+            previewBoxY3,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .fillColor('#fafafa')
+          .fill()
+          .strokeColor(borderGray)
+          .lineWidth(1)
+          .roundedRect(
+            rightColumnX,
+            previewBoxY3,
+            previewBoxWidth,
+            singlePreviewHeight,
+            6
+          )
+          .stroke()
+
+        try {
+          doc.image(previewImages[2], rightColumnX + 6, previewBoxY3 + 6, {
+            fit: [previewBoxWidth - 12, singlePreviewHeight - 12],
+            align: 'center',
+            valign: 'center',
+          })
+        } catch (error) {
+          console.warn(`Could not add third preview image:`, error)
+        }
       }
 
-      // Linke Spalte: Preis oben, darunter Größen, dann Farben
-      // Preis-Box direkt unter dem Headerbereich
+      // Linke Spalte: Produktname oben, dann Preis, darunter Größen, dann Farben
       const priceBoxX = leftColumnX
       const priceBoxWidth = leftColumnWidth
-      const priceBoxY = sectionTopY
+      
+      // Produktname über dem Preis-Block
+      doc
+        .fontSize(18)
+        .fillColor(textColor)
+        .font('Helvetica-Bold')
+        .text(product.name, priceBoxX, sectionTopY, {
+          width: priceBoxWidth,
+          align: 'left',
+        })
+        .moveDown(0.5)
+      
+      // Preis-Box unter dem Produktnamen
+      const priceBoxY = doc.y
       doc
         .roundedRect(priceBoxX, priceBoxY, priceBoxWidth, 60, 4)
         .fillColor('#f8f9fa')
@@ -594,6 +926,74 @@ async function generatePdfWithPdfKit(
 
       // Farben (nach Größen)
       if (product.colors && product.colors.length > 0) {
+        const colorBoxWidth = 32
+        const colorBoxHeight = 16
+        const colorBoxSpacing = 38
+        const maxColorsPerRow = 6
+        const startX = leftColumnX
+
+        const renderColorChips = (
+          colorsToRender: Array<{ name: string; hex?: string | null }>,
+          startY: number
+        ) => {
+          let colorX = startX
+          let colorY = startY
+          let colorsInRow = 0
+
+          colorsToRender.forEach((color) => {
+            if (colorsInRow >= maxColorsPerRow) {
+              colorX = startX
+              colorY += colorBoxHeight + 20
+              colorsInRow = 0
+            }
+
+            const hexColor = color.hex || '#cccccc'
+            const radius = 4
+
+            doc
+              .roundedRect(colorX, colorY, colorBoxWidth, colorBoxHeight, radius)
+              .fillColor(hexColor)
+              .fill()
+
+            doc
+              .roundedRect(colorX, colorY, colorBoxWidth, colorBoxHeight, radius)
+              .strokeColor(borderGray)
+              .lineWidth(1)
+              .stroke()
+
+            doc
+              .fontSize(6)
+              .fillColor('#666666')
+              .font('Helvetica')
+              .text(color.name, colorX, colorY + colorBoxHeight + 4, {
+                width: colorBoxWidth,
+                align: 'center',
+              })
+
+            colorX += colorBoxSpacing
+            colorsInRow++
+          })
+
+          return colorY + colorBoxHeight + 20
+        }
+
+        const selectedColors = product.colors.filter((c) => c.selected)
+        if (selectedColors.length > 0) {
+          doc
+            .fontSize(12)
+            .fillColor(textColor)
+            .font('Helvetica-Bold')
+            .text('Ausgewählte Farben:', leftColumnX, doc.y, {
+              width: leftColumnWidth,
+              align: 'left',
+            })
+            .moveDown(0.3)
+
+          const afterSelectedY = renderColorChips(selectedColors, doc.y)
+          doc.y = afterSelectedY
+          doc.moveDown(0.3)
+        }
+
         doc
           .fontSize(12)
           .fillColor(textColor)
@@ -604,67 +1004,13 @@ async function generatePdfWithPdfKit(
           })
           .moveDown(0.3)
 
-        const colorBoxSize = 30
-        const colorBoxSpacing = 40
-        const startX = leftColumnX
-        let colorX = startX
-        let colorY = doc.y
-        const maxColorsPerRow = 6
-        let colorsInRow = 0
-
-        product.colors.forEach((color) => {
-          if (colorsInRow >= maxColorsPerRow) {
-            colorX = startX
-            colorY += colorBoxSize + 20
-            colorsInRow = 0
-          }
-
-          // Farbbox zeichnen (rund) und ausgewählte Farbe highlighten
-          const hexColor = color.hex || '#cccccc'
-          const radius = colorBoxSize / 2
-          const centerX = colorX + radius
-          const centerY = colorY + radius
-
-          doc
-            .circle(centerX, centerY, radius)
-            .fillColor(hexColor)
-            .fill()
-
-          if (color.selected) {
-            doc
-              .strokeColor(primaryColor)
-              .lineWidth(2)
-              .circle(centerX, centerY, radius)
-              .stroke()
-          } else {
-            doc
-              .strokeColor(borderGray)
-              .lineWidth(1)
-              .circle(centerX, centerY, radius)
-              .stroke()
-          }
-
-          // Farbname unter der Box
-          doc
-            .fontSize(6)
-            .fillColor('#666666')
-            .font('Helvetica')
-            .text(color.name, colorX, colorY + colorBoxSize + 4, {
-              width: colorBoxSize,
-              align: 'center',
-            })
-
-          colorX += colorBoxSpacing
-          colorsInRow++
-        })
-
-        // Setze Y-Position nach Farben
-        doc.y = colorY + colorBoxSize + 25
+        const afterAvailableY = renderColorChips(product.colors, doc.y)
+        doc.y = afterAvailableY
         doc.moveDown(0.5)
       }
 
       // Unterkante der zweispaltigen Sektion
-      const sectionBottomY = Math.max(doc.y, previewBoxY + previewBoxHeight)
+      const sectionBottomY = Math.max(doc.y, previewBoxY + actualPreviewHeight)
       doc.y = sectionBottomY + 10
 
       // Footer auf jeder Seite

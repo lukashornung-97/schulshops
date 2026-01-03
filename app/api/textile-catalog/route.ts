@@ -74,6 +74,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Bereinige Farben: entferne undefined-Werte
+    const cleanedColors = Array.isArray(available_colors)
+      ? available_colors.map((c: any) => {
+          const color: any = { name: c.name }
+          if (c.hex) color.hex = c.hex
+          return color
+        })
+      : (available_colors || [])
+
     const { data, error } = await supabaseAdmin
       .from('textile_catalog')
       .insert({
@@ -81,7 +90,7 @@ export async function POST(request: NextRequest) {
         brand: brand || null,
         article_number: article_number || null,
         base_price: parseFloat(base_price),
-        available_colors: available_colors || [],
+        available_colors: cleanedColors,
         available_sizes: available_sizes || [],
         image_url: image_url || null,
         description: description || null,
@@ -92,8 +101,9 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('Error creating textile:', error)
+      console.error('Insert data:', JSON.stringify({ name, available_colors: cleanedColors }, null, 2))
       return NextResponse.json(
-        { error: 'Fehler beim Erstellen des Textils' },
+        { error: `Fehler beim Erstellen des Textils: ${error.message || 'Unbekannter Fehler'}` },
         { status: 500 }
       )
     }
